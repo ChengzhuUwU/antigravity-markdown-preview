@@ -1,0 +1,30 @@
+{
+  "name": "antigravity-markdown-preview",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Lightweight real-time Markdown & Session previewer plugin for Antigravity CLI and Antigravity 2.0 with 2x8 color themes.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ChengzhuUwU/antigravity-markdown-preview.git"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "bin": {
+    "agy-preview": "./bin/agy-preview.mjs"
+  },
+  "scripts": {
+    "sync-vendor": "node scripts/sync-vendor.mjs",
+    "install-plugin": "node scripts/install-plugin.mjs",
+    "pack-plugin": "node scripts/pack-plugin.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "preview": "node bin/agy-preview.mjs --open"
+  },
+  "devDependencies": {
+    "@highlightjs/cdn-assets": "^11.11.1",
+    "katex": "^0.16.22",
+    "marked": "^15.0.12",
+    "mermaid": "^11.6.0"
+  }
+}

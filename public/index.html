@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light" data-palette="parchment" data-width="normal" data-prose="sans">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Antigravity Markdown Preview</title>
+  <script src="/preload.js"></script>
+  <link rel="stylesheet" href="/vendor/katex.min.css">
+  <link id="hljs-light-css" rel="stylesheet" href="/vendor/hljs-light.min.css">
+  <link id="hljs-dark-css" rel="stylesheet" href="/vendor/hljs-dark.min.css" disabled>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Collapsible Left Sidebar -->
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-top">
+        <div class="brand-row">
+          <div class="brand-mark">
+            <span class="brand-dot">M</span>
+            <span>Markdown Preview</span>
+          </div>
+          <button id="paste-open-btn" class="pill-btn" title="Open local file or paste Markdown / CLI output (P)">+ Open / Paste</button>
+        </div>
+
+        <div class="mode-switch">
+          <button id="mode-sessions-btn" class="mode-btn active" type="button">Sessions</button>
+          <button id="mode-docs-btn" class="mode-btn" type="button">Docs / Clips</button>
+        </div>
+
+        <!-- Sessions-only Flavor Selector -->
+        <div id="flavor-controls-row" class="sidebar-controls">
+          <select id="flavor-select" class="select-sm" title="Antigravity Product Flavor">
+            <option value="antigravity-cli">antigravity-cli</option>
+          </select>
+        </div>
+
+        <!-- Docs/Clips-only Toolbar (Browse File + Manage Mode) -->
+        <div id="docs-controls-row" class="sidebar-controls hidden">
+          <button id="docs-browse-btn" class="pill-btn" style="flex:1;" type="button" title="Select local file with exact path">📂 Browse…</button>
+          <button id="docs-manage-btn" class="pill-btn" style="flex:1;" type="button" title="Reorder, rename, or delete docs">⚙ Manage</button>
+        </div>
+
+        <div class="sidebar-controls">
+          <input id="sidebar-search" class="input-sm" type="search" placeholder="Search projects, titles, user prompts…" autocomplete="off">
+        </div>
+      </div>
+
+      <div id="session-list" class="session-list">
+        <div style="padding:16px 10px;font-size:0.78rem;color:var(--text-faint);">Loading sessions…</div>
+      </div>
+    </aside>
+
+    <!-- Main Reader Stage -->
+    <main class="main-workspace">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button id="sidebar-toggle-btn" class="icon-btn" title="Toggle Sidebar (Ctrl+B)" aria-label="Toggle Sidebar">☰</button>
+          <span id="doc-title" class="doc-title">Select a session</span>
+          <span id="live-pill" class="live-pill">Connecting…</span>
+        </div>
+
+        <div class="topbar-right">
+          <button id="sync-btn" class="pill-btn" title="Sync now (R)">↻ Sync</button>
+          <button id="find-toggle-btn" class="icon-btn" title="Find in page (Ctrl+K or /)" aria-label="Find">⌕</button>
+          <button id="tables-btn" class="pill-btn" title="Expand table columns up to 50% page width with horizontal slider">Tables</button>
+          <button id="width-btn" class="pill-btn" title="Toggle Width (W)">Width</button>
+          <button id="prose-btn" class="pill-btn" title="Toggle Sans/Serif prose (F)">Aa</button>
+          <div class="theme-dropdown-wrap">
+            <button id="theme-btn" class="pill-btn" type="button" title="Select Light/Dark mode &amp; Color Palette (T)">
+              <span id="theme-btn-swatch" class="theme-swatch-dot"></span>
+              <span id="theme-btn-label">Theme</span>
+              <span style="font-size:0.65rem;opacity:0.7;">▾</span>
+            </button>
+            <div id="theme-menu" class="theme-menu hidden" role="menu"></div>
+          </div>
+          <button id="export-btn" class="pill-btn primary" title="Export clean Markdown">Export .md</button>
+          <button id="toc-toggle-btn" class="pill-btn active" title="Toggle Outline (O)">Outline</button>
+        </div>
+      </header>
+
+      <div id="find-bar" class="find-bar hidden">
+        <input id="find-input" type="search" placeholder="Search user prompts, rendered markdown, or expanded blocks…">
+        <span id="find-count" class="find-count"></span>
+        <button id="find-prev-btn" class="code-mini-btn" type="button">Prev</button>
+        <button id="find-next-btn" class="code-mini-btn" type="button">Next</button>
+        <button id="find-close-btn" class="code-mini-btn" type="button">Close</button>
+      </div>
+
+      <div class="content-stage">
+        <div id="reader-scroll" class="reader-scroll">
+          <div id="reader-column" class="reader-column">
+            <div class="empty-state">
+              <strong>Markdown Preview Ready</strong>
+              <span>Run <code>agy-preview</code>, select a session on the left, or open/drop any <code>.md</code> / <code>.jsonl</code> file.</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Split Side Preview Pane (opened via [Open in sidebar]) -->
+        <div id="side-resizer" class="side-resizer hidden"></div>
+        <aside id="side-preview-pane" class="side-preview-pane hidden">
+          <div class="side-preview-header">
+            <div class="side-preview-nav">
+              <button id="side-back-btn" class="icon-btn sm" type="button" title="Back" disabled>←</button>
+              <button id="side-fwd-btn" class="icon-btn sm" type="button" title="Forward" disabled>→</button>
+              <div class="side-preview-titles">
+                <span id="side-preview-title" class="side-preview-title">Preview</span>
+                <span id="side-preview-path" class="side-preview-path"></span>
+              </div>
+            </div>
+            <div class="side-preview-actions">
+              <button id="side-reveal-btn" class="code-mini-btn" type="button" title="打开文件所在目录 (Reveal in Explorer)">📂 目录</button>
+              <button id="side-promote-btn" class="code-mini-btn hidden" type="button" title="Open as main document">⤢ Main</button>
+              <button id="side-wrap-btn" class="code-mini-btn hidden" type="button" title="Wrap code lines">Wrap</button>
+              <button id="side-copy-btn" class="code-mini-btn" type="button" title="Copy content">Copy</button>
+              <button id="side-close-btn" class="icon-btn sm" type="button" title="Close side preview (Esc)">✕</button>
+            </div>
+          </div>
+          <div id="side-preview-body" class="side-preview-body"></div>
+        </aside>
+
+        <aside id="toc-drawer" class="toc-drawer">
+          <div class="toc-header">Outline</div>
+          <div id="toc-list" class="toc-list"></div>
+        </aside>
+      </div>
+    </main>
+  </div>
+
+  <!-- Docs / Clips Hover Preview Popover -->
+  <div id="doc-hover-popover" class="doc-hover-popover hidden">
+    <div class="doc-hover-header">
+      <strong id="doc-hover-title" class="doc-hover-title"></strong>
+      <span id="doc-hover-path" class="doc-hover-path"></span>
+    </div>
+    <div id="doc-hover-body" class="doc-hover-body assistant-markdown"></div>
+  </div>
+
+  <!-- Popup File Preview Modal (opened when clicking hyperlinks directly) -->
+  <div id="file-preview-modal" class="modal-backdrop hidden">
+    <div class="modal-panel file-preview-panel">
+      <div class="modal-header">
+        <div class="side-preview-titles" style="min-width:0;flex:1;">
+          <strong id="popup-preview-title" class="side-preview-title">Preview</strong>
+          <span id="popup-preview-path" class="side-preview-path"></span>
+        </div>
+        <div class="side-preview-actions">
+          <button id="popup-to-sidebar-btn" class="open-sidebar-pill" type="button" title="Pin this file to the right split sidebar">Open in sidebar</button>
+          <button id="popup-reveal-btn" class="code-mini-btn" type="button" title="打开文件所在目录 (Reveal in Explorer)">📂 目录</button>
+          <button id="popup-wrap-btn" class="code-mini-btn hidden" type="button">Wrap</button>
+          <button id="popup-copy-btn" class="code-mini-btn" type="button">Copy</button>
+          <button id="popup-close-btn" class="icon-btn sm" type="button" title="Close (Esc)">✕</button>
+        </div>
+      </div>
+      <div id="popup-preview-body" class="popup-preview-body"></div>
+    </div>
+  </div>
+
+  <!-- Open Local File / Paste Markdown Modal -->
+  <div id="paste-modal" class="modal-backdrop hidden">
+    <div class="modal-panel">
+      <div class="modal-header">
+        <strong>Open Local File or Paste Markdown / CLI Output</strong>
+        <button id="paste-close-btn" class="code-mini-btn" type="button">Close</button>
+      </div>
+      <div class="modal-body">
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          <label style="font-size:0.75rem;color:var(--text-muted);font-weight:550;">Local File Path or Base Folder (resolves relative links &amp; images cleanly)</label>
+          <div style="display:flex;gap:6px;">
+            <input id="paste-filepath-input" class="input-sm" type="text" placeholder="e.g. E:\Projects\HUAWEI_Precision\README.md  or  E:\Projects\HUAWEI_Precision">
+            <button id="paste-browse-btn" class="pill-btn" type="button">📂 Browse…</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <input id="paste-title-input" class="input-sm" type="text" placeholder="Optional custom title">
+          <select id="paste-mode-select" class="select-sm" style="width:180px;">
+            <option value="auto">Auto-detect format</option>
+            <option value="markdown">Markdown / CLI text</option>
+            <option value="stream-json">stream-json / JSONL</option>
+          </select>
+        </div>
+        <textarea id="paste-textarea" class="paste-area" placeholder="Leave blank if loading a Local File Path above — or paste Markdown, a file path, raw CLI text, or `stream-json` NDJSON here…"></textarea>
+        <div style="display:flex;justify-content:flex-end;gap:8px;">
+          <button id="paste-submit-btn" class="pill-btn primary" type="button">Open Preview</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Image Zoom Lightbox -->
+  <div id="image-modal" class="modal-backdrop hidden">
+    <div class="image-lightbox-inner">
+      <img id="image-modal-img" src="" alt="">
+      <div id="image-modal-caption" class="image-lightbox-caption"></div>
+    </div>
+  </div>
+
+  <script src="/vendor/marked.min.js"></script>
+  <script src="/vendor/highlight.min.js"></script>
+  <script src="/vendor/katex.min.js"></script>
+  <script>
+    (async () => {
+      if (window.location.protocol !== 'plugin:') {
+        const s = document.createElement('script');
+        s.type = 'module';
+        s.src = '/js/app.js';
+        document.body.appendChild(s);
+        return;
+      }
+      const files = ['js/markdown.js', 'js/transcript-view.js', 'js/app.js'];
+      const sources = {};
+      await Promise.all(files.map(async (f) => {
+        const res = await fetch('/' + f);
+        if (!res.ok) throw new Error(`Failed to fetch ${f}: ${res.status}`);
+        sources[f] = await res.text();
+      }));
+      const blobs = {};
+      for (const f of files) {
+        let code = sources[f];
+        for (const [dep, blobUrl] of Object.entries(blobs)) {
+          const shortDep = dep.replace('js/', '');
+          code = code
+            .replaceAll(`'./${dep}'`, `'${blobUrl}'`)
+            .replaceAll(`"./${dep}"`, `"${blobUrl}"`)
+            .replaceAll(`'./${shortDep}'`, `'${blobUrl}'`)
+            .replaceAll(`"./${shortDep}"`, `"${blobUrl}"`);
+        }
+        blobs[f] = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
+      }
+      await import(blobs['js/app.js']);
+    })().catch((err) => {
+      document.getElementById('reader-column').innerHTML =
+        `<div class="notice-banner error">Bootstrap failed: ${err.message}</div>`;
+    });
+  </script>
+</body>
+</html>

@@ -48,14 +48,14 @@ Transform dense terminal streams, 1,000+ step agent trajectories, LaTeX math, wi
 Because offline vendor assets (`KaTeX`, `Mermaid`, `highlight.js`, `marked`) are pre-bundled in `public/vendor/`, you can install directly from GitHub with zero build steps:
 
 ```bash
-agy plugin install https://github.com/ChengzhuUwU/antigravity-markdown-preview
+agy plugin install https://github.com/ChengzhuUwU/antigravity-session-preview
 ```
 
 ### Option 2 — Local Clone & Global `agy-preview` CLI Shim
 
 ```bash
-git clone https://github.com/ChengzhuUwU/antigravity-markdown-preview.git
-cd antigravity-markdown-preview
+git clone https://github.com/ChengzhuUwU/antigravity-session-preview.git
+cd antigravity-session-preview
 
 # Installs plugin to ~/.gemini/config/plugins/agy-markdown-preview
 # and registers the `agy-preview` command into ~/.local/bin

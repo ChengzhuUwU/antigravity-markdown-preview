@@ -1,9 +1,9 @@
 # HANDOFF — Antigravity Markdown Preview (`agy-markdown-preview`)
 
-> **Last Updated**: 2026-11-24
+> **Last Updated**: 2026-11-25
 > **Current Version**: `v0.2.1` (Synced with `origin/main`)
 > **Repository**: `E:\OpenSources2\agy_plugin\antigravity-markdown-preview`
-> **Remote**: `git@github.com:ChengzhuUwU/antigravity-markdown-preview.git` (`https://github.com/ChengzhuUwU/antigravity-markdown-preview`)
+> **Remote**: `git@github.com:ChengzhuUwU/antigravity-session-preview.git` (`https://github.com/ChengzhuUwU/antigravity-session-preview`)
 
 This document provides complete architectural context, user UX contracts, platform gotchas, verification commands, and prioritized next tasks so a new Agent can take over development immediately without regressions.
 

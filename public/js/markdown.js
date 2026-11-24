@@ -4,6 +4,8 @@
 // - Safe HTML sanitizer preserving README <img>/<details>/<br>/centered blocks while blocking scripts
 // - CJK bold punctuation compatibility + KaTeX math + Obsidian/GitHub callouts + lazy Mermaid
 
+import { getLang, t } from './i18n.js';
+
 const blockHtmlCache = new Map();
 let mermaidLoaderPromise = null;
 let mermaidCounter = 0;
@@ -290,9 +292,9 @@ function createMarkedForBase(baseDir = '') {
       if (info.kind === 'local') {
         const escapedTarget = escapeHtml(info.rawPath);
         const escapedBase = escapeHtml(baseDir);
-        const linkEl = `<a href="#" class="local-file-link" data-local-href="${escapedTarget}" data-base-dir="${escapedBase}" data-preview-mode="popup" title="Preview: ${escapedTarget}">${text}</a>`;
+        const linkEl = `<a href="#" class="local-file-link" data-local-href="${escapedTarget}" data-base-dir="${escapedBase}" data-preview-mode="popup" title="${escapedTarget}">${text}</a>`;
         if (info.isPreviewable) {
-          return `<span class="code-link-group">${linkEl}<button type="button" class="open-sidebar-pill" data-local-href="${escapedTarget}" data-base-dir="${escapedBase}" data-preview-mode="sidebar" title="Open ${escapedTarget} in side panel">Open in sidebar</button></span>`;
+          return `<span class="code-link-group">${linkEl}<button type="button" class="open-sidebar-pill" data-local-href="${escapedTarget}" data-base-dir="${escapedBase}" data-preview-mode="sidebar" title="${escapeHtml(t('openInSidebarTip', { path: info.rawPath }))}">${escapeHtml(t('openInSidebar'))}</button></span>`;
         }
         return linkEl;
       }
@@ -325,16 +327,16 @@ function createMarkedForBase(baseDir = '') {
           <div class="code-card-header">
             <span>mermaid · ELK</span>
             <div class="code-card-actions">
-              <button type="button" class="code-mini-btn" data-action="mmd-zoom-out" title="缩小 (Ctrl + 滚轮)">−</button>
-              <button type="button" class="code-mini-btn" data-action="mmd-zoom-reset" data-zoom-label title="重置缩放与位置">100%</button>
-              <button type="button" class="code-mini-btn" data-action="mmd-zoom-in" title="放大 (Ctrl + 滚轮)">+</button>
-              <button type="button" class="code-mini-btn" data-action="mmd-fullscreen" title="大屏交互预览 (双击画布亦可打开)">⛶ 大屏预览</button>
-              <button type="button" class="code-mini-btn" data-action="mmd-download-svg" title="下载矢量 SVG">⬇ SVG</button>
-              <button type="button" class="code-mini-btn" data-action="copy-raw">Copy</button>
+              <button type="button" class="code-mini-btn" data-action="mmd-zoom-out" title="${escapeHtml(t('mmdZoomOutTip'))}">−</button>
+              <button type="button" class="code-mini-btn" data-action="mmd-zoom-reset" data-zoom-label title="${escapeHtml(t('mmdZoomResetTip'))}">100%</button>
+              <button type="button" class="code-mini-btn" data-action="mmd-zoom-in" title="${escapeHtml(t('mmdZoomInTip'))}">+</button>
+              <button type="button" class="code-mini-btn" data-action="mmd-fullscreen" title="${escapeHtml(t('mmdFullscreenTip'))}">${escapeHtml(t('mmdFullscreenBtn'))}</button>
+              <button type="button" class="code-mini-btn" data-action="mmd-download-svg" title="${escapeHtml(t('mmdDownloadTip'))}">${escapeHtml(t('mmdDownloadBtn'))}</button>
+              <button type="button" class="code-mini-btn" data-action="copy-raw">${escapeHtml(t('copyBtn'))}</button>
             </div>
           </div>
-          <div class="mermaid-stage" title="按住左键拖拽平移 · Ctrl+滚轮缩放 · 双击大屏预览">
-            <div class="mermaid-panzoom-canvas"><span style="color:var(--text-faint);font-size:0.8rem;">Rendering diagram…</span></div>
+          <div class="mermaid-stage" title="${escapeHtml(t('mmdStageTip'))}">
+            <div class="mermaid-panzoom-canvas"><span style="color:var(--text-faint);font-size:0.8rem;">${escapeHtml(t('renderingDiagram'))}</span></div>
           </div>
         </div>`;
       }
@@ -343,10 +345,10 @@ function createMarkedForBase(baseDir = '') {
       const langLabel = lang || 'text';
       return `<div class="code-card" data-lang="${escapeHtml(lang)}">
         <div class="code-card-header">
-          <span>${escapeHtml(langLabel)} · ${lineCount} lines</span>
+          <span>${escapeHtml(langLabel)} · ${lineCount} ${escapeHtml(t('linesUnit'))}</span>
           <div class="code-card-actions">
-            <button type="button" class="code-mini-btn" data-action="toggle-wrap">Wrap</button>
-            <button type="button" class="code-mini-btn" data-action="copy-code">Copy</button>
+            <button type="button" class="code-mini-btn" data-action="toggle-wrap">${escapeHtml(t('wrapBtn'))}</button>
+            <button type="button" class="code-mini-btn" data-action="copy-code">${escapeHtml(t('copyBtn'))}</button>
           </div>
         </div>
         <pre><code class="${lang ? `language-${escapeHtml(lang)}` : ''}">${escapeHtml(code)}</code></pre>
@@ -371,7 +373,7 @@ function createMarkedForBase(baseDir = '') {
         return `<tr>${cells}</tr>`;
       }).join('');
       const expandBar = colCount >= 3
-        ? `<div class="table-card-header"><span>${colCount} cols · ${rowCount} rows</span><button type="button" class="code-mini-btn" data-action="toggle-table-expand" title="Expand columns up to 50% page width with horizontal slider">↔ Expand</button></div>`
+        ? `<div class="table-card-header"><span>${escapeHtml(t('tableMeta', { cols: colCount, rows: rowCount }))}</span><button type="button" class="code-mini-btn" data-action="toggle-table-expand" title="${escapeHtml(t('tableExpandTip'))}">${escapeHtml(t('tableExpandBtn'))}</button></div>`
         : '';
       return `<div class="table-card">${expandBar}<div class="table-wrap"><table>${headerHtml}<tbody>${rowsHtml}</tbody></table></div></div>`;
     },
@@ -421,11 +423,12 @@ function createMarkedForBase(baseDir = '') {
 
 const markedByBase = new Map();
 function getMarked(baseDir = '') {
-  let inst = markedByBase.get(baseDir);
+  const cacheKey = `${getLang()}\0${baseDir}`;
+  let inst = markedByBase.get(cacheKey);
   if (!inst) {
     inst = createMarkedForBase(baseDir);
     if (inst) {
-      markedByBase.set(baseDir, inst);
+      markedByBase.set(cacheKey, inst);
       if (markedByBase.size > 32) {
         markedByBase.delete(markedByBase.keys().next().value);
       }
@@ -478,7 +481,7 @@ export function renderMarkdownHtml(markdown, { baseDir = '' } = {}) {
   const htmlParts = [];
 
   for (const blk of blocks) {
-    const key = `${baseDir}\0${blk}`;
+    const key = `${getLang()}\0${baseDir}\0${blk}`;
     let html = blockHtmlCache.get(key);
     if (html === undefined) {
       html = renderBlockUncached(blk, baseDir);
@@ -1005,12 +1008,12 @@ export function attachCodeCardInteractions(root, { onOpenLocalLink, onOpenConver
         tableCard.dataset.localOverride = 'compact';
         tableCard.classList.remove('expanded');
         tableCard.classList.add('force-compact');
-        btn.textContent = '↔ Expand';
+        btn.textContent = t('tableExpandBtn');
       } else {
         tableCard.classList.remove('force-compact');
         delete tableCard.dataset.localOverride;
         const expanded = tableCard.classList.toggle('expanded');
-        btn.textContent = expanded ? '⤡ Fit' : '↔ Expand';
+        btn.textContent = expanded ? t('tableFitBtn') : t('tableExpandBtn');
       }
       return;
     }
@@ -1041,7 +1044,7 @@ export function attachCodeCardInteractions(root, { onOpenLocalLink, onOpenConver
 
     if (action === 'toggle-wrap') {
       const wrapped = card.classList.toggle('wrapped');
-      btn.textContent = wrapped ? 'Unwrap' : 'Wrap';
+      btn.textContent = wrapped ? t('unwrapBtn') : t('wrapBtn');
       return;
     }
 
@@ -1052,7 +1055,7 @@ export function attachCodeCardInteractions(root, { onOpenLocalLink, onOpenConver
       try {
         await navigator.clipboard.writeText(text);
         const orig = btn.textContent;
-        btn.textContent = 'Copied';
+        btn.textContent = t('copiedBtn');
         setTimeout(() => { btn.textContent = orig; }, 1400);
       } catch {
         // Clipboard denied fallback

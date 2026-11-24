@@ -18,36 +18,36 @@
         <div class="brand-row">
           <div class="brand-mark">
             <span class="brand-dot">M</span>
-            <span>Markdown Preview</span>
+            <span data-i18n="brandTitle">Markdown Preview</span>
           </div>
-          <button id="paste-open-btn" class="pill-btn" title="Open local file or paste Markdown / CLI output (P)">+ Open / Paste</button>
+          <button id="paste-open-btn" class="pill-btn" data-i18n="openPasteBtn" data-i18n-title="openPasteTip" title="Open local file or paste Markdown / CLI output (P)">+ Open / Paste</button>
         </div>
 
         <div class="mode-switch">
-          <button id="mode-sessions-btn" class="mode-btn active" type="button">Sessions</button>
-          <button id="mode-docs-btn" class="mode-btn" type="button">Docs / Clips</button>
+          <button id="mode-sessions-btn" class="mode-btn active" type="button" data-i18n="tabSessions">Sessions</button>
+          <button id="mode-docs-btn" class="mode-btn" type="button" data-i18n="tabDocs">Docs / Clips</button>
         </div>
 
         <!-- Sessions-only Flavor Selector -->
         <div id="flavor-controls-row" class="sidebar-controls">
-          <select id="flavor-select" class="select-sm" title="Antigravity Product Flavor">
+          <select id="flavor-select" class="select-sm" data-i18n-title="flavorTip" title="Antigravity Product Flavor">
             <option value="antigravity-cli">antigravity-cli</option>
           </select>
         </div>
 
         <!-- Docs/Clips-only Toolbar (Browse File + Manage Mode) -->
         <div id="docs-controls-row" class="sidebar-controls hidden">
-          <button id="docs-browse-btn" class="pill-btn" style="flex:1;" type="button" title="Select local file with exact path">📂 Browse…</button>
-          <button id="docs-manage-btn" class="pill-btn" style="flex:1;" type="button" title="Reorder, rename, or delete docs">⚙ Manage</button>
+          <button id="docs-browse-btn" class="pill-btn" style="flex:1;" type="button" data-i18n="browseBtn" data-i18n-title="browseTip" title="Select local file with exact path">📂 Browse…</button>
+          <button id="docs-manage-btn" class="pill-btn" style="flex:1;" type="button" data-i18n-title="manageTip" title="Reorder, rename, or delete docs">⚙ Manage</button>
         </div>
 
         <div class="sidebar-controls">
-          <input id="sidebar-search" class="input-sm" type="search" placeholder="Search projects, titles, user prompts…" autocomplete="off">
+          <input id="sidebar-search" class="input-sm" type="search" data-i18n-placeholder="searchPlaceholder" placeholder="Search projects, titles, user prompts…" autocomplete="off">
         </div>
       </div>
 
       <div id="session-list" class="session-list">
-        <div style="padding:16px 10px;font-size:0.78rem;color:var(--text-faint);">Loading sessions…</div>
+        <div style="padding:16px 10px;font-size:0.78rem;color:var(--text-faint);" data-i18n="loadingSessions">Loading sessions…</div>
       </div>
     </aside>
 
@@ -56,48 +56,47 @@
       <header class="topbar">
         <div class="topbar-left">
           <button id="sidebar-toggle-btn" class="icon-btn" title="Toggle Sidebar (Ctrl+B)" aria-label="Toggle Sidebar">☰</button>
-          <span id="doc-title" class="doc-title">Select a session</span>
-          <span id="live-pill" class="live-pill">Connecting…</span>
+          <span id="doc-title" class="doc-title" data-i18n="selectSession">Select a session</span>
+          <span id="live-pill" class="live-pill" data-i18n="connecting">Connecting…</span>
         </div>
 
         <div class="topbar-right">
-          <button id="sync-btn" class="pill-btn" title="Sync now (R)">↻ Sync</button>
-          <button id="find-toggle-btn" class="icon-btn" title="Find in page (Ctrl+K or /)" aria-label="Find">⌕</button>
-          <button id="jump-top-btn" class="icon-btn" type="button" title="跳转到顶部 / Jump to Top" aria-label="Jump to Top">
+          <!-- Unified Persistent Preferences Dropdown (placed to the LEFT of Sync) -->
+          <div id="prefs-dropdown-wrap" class="theme-dropdown-wrap">
+            <button id="prefs-btn" class="pill-btn" type="button" data-i18n-title="prefsTip" title="Appearance, Typography &amp; Language Preferences">
+              <span id="prefs-btn-swatch" class="theme-swatch-dot"></span>
+              <span id="prefs-btn-label" data-i18n="prefsBtn">Preferences</span>
+              <span style="font-size:0.65rem;opacity:0.7;">▾</span>
+            </button>
+            <div id="prefs-menu" class="theme-menu prefs-menu hidden" role="menu"></div>
+          </div>
+
+          <button id="sync-btn" class="pill-btn" data-i18n="syncBtn" data-i18n-title="syncTip" title="Sync now (R)">↻ Sync</button>
+          <button id="find-toggle-btn" class="icon-btn" data-i18n-title="findTip" title="Find in page (Ctrl+K or /)" aria-label="Find">⌕</button>
+          <button id="jump-top-btn" class="icon-btn" type="button" data-i18n-title="jumpTopTip" title="Jump to Top" aria-label="Jump to Top">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.5h10M8 13.5V5M4.5 8.5L8 5l3.5 3.5"/></svg>
           </button>
-          <button id="jump-bottom-btn" class="icon-btn" type="button" title="跳转到底部 / Jump to Bottom" aria-label="Jump to Bottom">
+          <button id="jump-bottom-btn" class="icon-btn" type="button" data-i18n-title="jumpBottomTip" title="Jump to Bottom" aria-label="Jump to Bottom">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13.5h10M8 2.5v8.5M4.5 7.5L8 11l3.5-3.5"/></svg>
           </button>
           <div id="tools-dropdown-wrap" class="theme-dropdown-wrap">
-            <button id="tools-btn" class="pill-btn" type="button" title="CLI Session Tools (/btw, /context, /usage)">
-              <span>Tools</span>
+            <button id="tools-btn" class="pill-btn" type="button" data-i18n-title="toolsTip" title="CLI Session Tools (/btw, /context, /usage)">
+              <span data-i18n="toolsBtn">Tools</span>
               <span style="font-size:0.65rem;opacity:0.7;">▾</span>
             </button>
-            <div id="tools-menu" class="theme-menu hidden" style="width:236px;" role="menu"></div>
+            <div id="tools-menu" class="theme-menu hidden" style="width:240px;" role="menu"></div>
           </div>
-          <button id="tables-btn" class="pill-btn" title="Expand table columns up to 50% page width with horizontal slider">Tables</button>
-          <button id="width-btn" class="pill-btn" title="Toggle Width (W)">Width</button>
-          <button id="prose-btn" class="pill-btn" title="Toggle Sans/Serif prose (F)">Aa</button>
-          <div class="theme-dropdown-wrap">
-            <button id="theme-btn" class="pill-btn" type="button" title="Select Light/Dark mode &amp; Color Palette (T)">
-              <span id="theme-btn-swatch" class="theme-swatch-dot"></span>
-              <span id="theme-btn-label">Theme</span>
-              <span style="font-size:0.65rem;opacity:0.7;">▾</span>
-            </button>
-            <div id="theme-menu" class="theme-menu hidden" role="menu"></div>
-          </div>
-          <button id="export-btn" class="pill-btn primary" title="Export clean Markdown">Export .md</button>
-          <button id="toc-toggle-btn" class="pill-btn active" title="Toggle Outline (O)">Outline</button>
+          <button id="export-btn" class="pill-btn primary" data-i18n="exportBtn" data-i18n-title="exportTip" title="Export clean Markdown">Export .md</button>
+          <button id="toc-toggle-btn" class="pill-btn active" data-i18n="outlineBtn" data-i18n-title="outlineTip" title="Toggle Outline (O)">Outline</button>
         </div>
       </header>
 
       <div id="find-bar" class="find-bar hidden">
-        <input id="find-input" type="search" placeholder="Search user prompts, rendered markdown, or expanded blocks…">
+        <input id="find-input" type="search" data-i18n-placeholder="findPlaceholder" placeholder="Search user prompts, rendered markdown, or expanded blocks…">
         <span id="find-count" class="find-count"></span>
-        <button id="find-prev-btn" class="code-mini-btn" type="button">Prev</button>
-        <button id="find-next-btn" class="code-mini-btn" type="button">Next</button>
-        <button id="find-close-btn" class="code-mini-btn" type="button">Close</button>
+        <button id="find-prev-btn" class="code-mini-btn" type="button" data-i18n="prevBtn">Prev</button>
+        <button id="find-next-btn" class="code-mini-btn" type="button" data-i18n="nextBtn">Next</button>
+        <button id="find-close-btn" class="code-mini-btn" type="button" data-i18n="closeBtn">Close</button>
       </div>
 
       <!-- Top-Pinned Session Tools Inspector (/btw, /context, /usage) -->
@@ -107,8 +106,8 @@
         <div id="reader-scroll" class="reader-scroll">
           <div id="reader-column" class="reader-column">
             <div class="empty-state">
-              <strong>Markdown Preview Ready</strong>
-              <span>Run <code>agy-preview</code>, select a session on the left, or open/drop any <code>.md</code> / <code>.jsonl</code> file.</span>
+              <strong data-i18n="readyTitle">Markdown Preview Ready</strong>
+              <span data-i18n-html="readyHint">Run <code>agy-preview</code>, select a session on the left, or open/drop any <code>.md</code> / <code>.jsonl</code> file.</span>
             </div>
           </div>
         </div>
@@ -126,18 +125,18 @@
               </div>
             </div>
             <div class="side-preview-actions">
-              <button id="side-reveal-btn" class="code-mini-btn" type="button" title="打开文件所在目录 (Reveal in Explorer)">📂 目录</button>
-              <button id="side-promote-btn" class="code-mini-btn hidden" type="button" title="Open as main document">⤢ Main</button>
-              <button id="side-wrap-btn" class="code-mini-btn hidden" type="button" title="Wrap code lines">Wrap</button>
-              <button id="side-copy-btn" class="code-mini-btn" type="button" title="Copy content">Copy</button>
-              <button id="side-close-btn" class="icon-btn sm" type="button" title="Close side preview (Esc)">✕</button>
+              <button id="side-reveal-btn" class="code-mini-btn" type="button" data-i18n="openFolderBtn" data-i18n-title="openFolderTip" title="Reveal file in system file manager">📂 Folder</button>
+              <button id="side-promote-btn" class="code-mini-btn hidden" type="button" data-i18n="promoteMainBtn" data-i18n-title="promoteMainTip" title="Open as main document">⤢ Main</button>
+              <button id="side-wrap-btn" class="code-mini-btn hidden" type="button" data-i18n="wrapBtn">Wrap</button>
+              <button id="side-copy-btn" class="code-mini-btn" type="button" data-i18n="copyBtn">Copy</button>
+              <button id="side-close-btn" class="icon-btn sm" type="button" title="Close (Esc)">✕</button>
             </div>
           </div>
           <div id="side-preview-body" class="side-preview-body"></div>
         </aside>
 
         <aside id="toc-drawer" class="toc-drawer">
-          <div class="toc-header">Outline</div>
+          <div class="toc-header" data-i18n="outlineHeader">Outline</div>
           <div id="toc-list" class="toc-list"></div>
         </aside>
       </div>
@@ -162,10 +161,10 @@
           <span id="popup-preview-path" class="side-preview-path"></span>
         </div>
         <div class="side-preview-actions">
-          <button id="popup-to-sidebar-btn" class="open-sidebar-pill" type="button" title="Pin this file to the right split sidebar">Open in sidebar</button>
-          <button id="popup-reveal-btn" class="code-mini-btn" type="button" title="打开文件所在目录 (Reveal in Explorer)">📂 目录</button>
-          <button id="popup-wrap-btn" class="code-mini-btn hidden" type="button">Wrap</button>
-          <button id="popup-copy-btn" class="code-mini-btn" type="button">Copy</button>
+          <button id="popup-to-sidebar-btn" class="open-sidebar-pill" type="button" data-i18n="openInSidebar">Open in sidebar</button>
+          <button id="popup-reveal-btn" class="code-mini-btn" type="button" data-i18n="openFolderBtn" data-i18n-title="openFolderTip" title="Reveal file in system file manager">📂 Folder</button>
+          <button id="popup-wrap-btn" class="code-mini-btn hidden" type="button" data-i18n="wrapBtn">Wrap</button>
+          <button id="popup-copy-btn" class="code-mini-btn" type="button" data-i18n="copyBtn">Copy</button>
           <button id="popup-close-btn" class="icon-btn sm" type="button" title="Close (Esc)">✕</button>
         </div>
       </div>
@@ -177,28 +176,28 @@
   <div id="paste-modal" class="modal-backdrop hidden">
     <div class="modal-panel">
       <div class="modal-header">
-        <strong>Open Local File or Paste Markdown / CLI Output</strong>
-        <button id="paste-close-btn" class="code-mini-btn" type="button">Close</button>
+        <strong data-i18n="pasteModalTitle">Open Local File or Paste Markdown / CLI Output</strong>
+        <button id="paste-close-btn" class="code-mini-btn" type="button" data-i18n="closeBtn">Close</button>
       </div>
       <div class="modal-body">
         <div style="display:flex;flex-direction:column;gap:4px;">
-          <label style="font-size:0.75rem;color:var(--text-muted);font-weight:550;">Local File Path or Base Folder (resolves relative links &amp; images cleanly)</label>
+          <label style="font-size:0.75rem;color:var(--text-muted);font-weight:550;" data-i18n="pastePathLabel">Local File Path or Base Folder (resolves relative links &amp; images cleanly)</label>
           <div style="display:flex;gap:6px;">
-            <input id="paste-filepath-input" class="input-sm" type="text" placeholder="e.g. E:\Projects\HUAWEI_Precision\README.md  or  E:\Projects\HUAWEI_Precision">
-            <button id="paste-browse-btn" class="pill-btn" type="button">📂 Browse…</button>
+            <input id="paste-filepath-input" class="input-sm" type="text" placeholder="e.g. E:\Projects\repo\README.md  or  /workspace/repo">
+            <button id="paste-browse-btn" class="pill-btn" type="button" data-i18n="browseBtn">📂 Browse…</button>
           </div>
         </div>
         <div style="display:flex;gap:8px;">
-          <input id="paste-title-input" class="input-sm" type="text" placeholder="Optional custom title">
+          <input id="paste-title-input" class="input-sm" type="text" data-i18n-placeholder="pasteTitlePlaceholder" placeholder="Optional custom title">
           <select id="paste-mode-select" class="select-sm" style="width:180px;">
-            <option value="auto">Auto-detect format</option>
-            <option value="markdown">Markdown / CLI text</option>
-            <option value="stream-json">stream-json / JSONL</option>
+            <option value="auto" data-i18n="fmtAuto">Auto-detect format</option>
+            <option value="markdown" data-i18n="fmtMarkdown">Markdown / CLI text</option>
+            <option value="stream-json" data-i18n="fmtStreamJson">stream-json / JSONL</option>
           </select>
         </div>
-        <textarea id="paste-textarea" class="paste-area" placeholder="Leave blank if loading a Local File Path above — or paste Markdown, a file path, raw CLI text, or `stream-json` NDJSON here…"></textarea>
+        <textarea id="paste-textarea" class="paste-area" data-i18n-placeholder="pasteAreaPlaceholder" placeholder="Leave blank if loading a Local File Path above — or paste Markdown, a file path, raw CLI text, or `stream-json` NDJSON here…"></textarea>
         <div style="display:flex;justify-content:flex-end;gap:8px;">
-          <button id="paste-submit-btn" class="pill-btn primary" type="button">Open Preview</button>
+          <button id="paste-submit-btn" class="pill-btn primary" type="button" data-i18n="openPreviewSubmit">Open Preview</button>
         </div>
       </div>
     </div>
@@ -217,15 +216,15 @@
     <div class="modal-panel mermaid-fullscreen-panel">
       <div class="modal-header">
         <div style="display:flex;align-items:center;gap:10px;">
-          <strong style="font-size:0.86rem;">Mermaid Diagram · ELK Orthogonal View</strong>
-          <span style="font-size:0.73rem;color:var(--text-faint);">滚轮自由缩放 · 按住左键拖拽平移</span>
+          <strong style="font-size:0.86rem;" data-i18n="mmdModalTitle">Mermaid Diagram · ELK Orthogonal View</strong>
+          <span style="font-size:0.73rem;color:var(--text-faint);" data-i18n="mmdModalHint">Scroll wheel to zoom · Drag with left mouse button to pan</span>
         </div>
         <div class="side-preview-actions">
-          <button id="mmd-modal-zoom-out" class="code-mini-btn" type="button" title="缩小 (Zoom Out)">−</button>
-          <button id="mmd-modal-zoom-reset" class="code-mini-btn" type="button" title="100% 原始比例">100%</button>
-          <button id="mmd-modal-zoom-fit" class="code-mini-btn" type="button" title="适应窗口总览 (Fit to Screen)">⊡ 适应窗口</button>
-          <button id="mmd-modal-zoom-in" class="code-mini-btn" type="button" title="放大 (Zoom In)">+</button>
-          <button id="mmd-modal-download" class="code-mini-btn" type="button" title="Download vector SVG">⬇ SVG</button>
+          <button id="mmd-modal-zoom-out" class="code-mini-btn" type="button" data-i18n-title="mmdZoomOutTip" title="Zoom Out">−</button>
+          <button id="mmd-modal-zoom-reset" class="code-mini-btn" type="button" data-i18n-title="mmdZoomResetTip" title="Reset Zoom">100%</button>
+          <button id="mmd-modal-zoom-fit" class="code-mini-btn" type="button" data-i18n="mmdFitBtn" data-i18n-title="mmdFitTip" title="Fit entire diagram to window">⊡ Fit Screen</button>
+          <button id="mmd-modal-zoom-in" class="code-mini-btn" type="button" data-i18n-title="mmdZoomInTip" title="Zoom In">+</button>
+          <button id="mmd-modal-download" class="code-mini-btn" type="button" data-i18n="mmdDownloadBtn" data-i18n-title="mmdDownloadTip" title="Download vector SVG">⬇ SVG</button>
           <button id="mmd-modal-close" class="icon-btn sm" type="button" title="Close (Esc)">✕</button>
         </div>
       </div>
@@ -247,7 +246,7 @@
         document.body.appendChild(s);
         return;
       }
-      const files = ['js/markdown.js', 'js/transcript-view.js', 'js/app.js'];
+      const files = ['js/i18n.js', 'js/markdown.js', 'js/transcript-view.js', 'js/app.js'];
       const sources = {};
       await Promise.all(files.map(async (f) => {
         const res = await fetch('/' + f);

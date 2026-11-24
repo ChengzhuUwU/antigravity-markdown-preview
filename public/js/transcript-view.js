@@ -1,3 +1,4 @@
+import { getLang, t } from './i18n.js';
 import { escapeHtml, isPreviewableFilePath, renderMarkdownHtml, enhanceMarkdownDom } from './markdown.js';
 
 const CHEVRON_SVG = `<svg class="chevron-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5L10.5 8 6 12.5"/></svg>`;
@@ -90,22 +91,22 @@ function renderToolDetailHtml(tool, baseDir) {
     parts.push(`<div class="tool-section-label">Output${truncNote}</div>`);
     parts.push(`<pre class="tool-pre" data-tool-output-pre="true">${escapeHtml(tool.outputPreview.text)}</pre>`);
     if (tool.outputPreview.truncated && tool.resultStepIndex != null) {
-      parts.push(`<div><button type="button" class="code-mini-btn" data-action="load-full-step" data-step="${tool.resultStepIndex}">Load full output</button></div>`);
+      parts.push(`<div><button type="button" class="code-mini-btn" data-action="load-full-step" data-step="${tool.resultStepIndex}">${escapeHtml(t('loadFullOutputBtn'))}</button></div>`);
     }
   }
 
   const extras = [];
   if (tool.subagentId) {
-    extras.push(`<button type="button" class="open-sidebar-pill" data-open-conv="${escapeHtml(tool.subagentId)}">View Subagent</button>`);
+    extras.push(`<button type="button" class="open-sidebar-pill" data-open-conv="${escapeHtml(tool.subagentId)}">${escapeHtml(t('viewSubagentBtn'))}</button>`);
   }
   if (tool.targetFile) {
-    extras.push(`<button type="button" class="open-sidebar-pill" data-local-href="${escapeHtml(tool.targetFile)}" data-base-dir="${escapeHtml(baseDir)}" data-preview-mode="sidebar">Open in sidebar</button>`);
+    extras.push(`<button type="button" class="open-sidebar-pill" data-local-href="${escapeHtml(tool.targetFile)}" data-base-dir="${escapeHtml(baseDir)}" data-preview-mode="sidebar">${escapeHtml(t('openInSidebar'))}</button>`);
   }
   if (tool.spooledPath) {
-    extras.push(`<button type="button" class="code-mini-btn" data-local-href="${escapeHtml(tool.spooledPath)}" data-base-dir="${escapeHtml(baseDir)}" data-preview-mode="popup">Open spooled output</button>`);
+    extras.push(`<button type="button" class="code-mini-btn" data-local-href="${escapeHtml(tool.spooledPath)}" data-base-dir="${escapeHtml(baseDir)}" data-preview-mode="popup">${escapeHtml(t('openSpooledBtn'))}</button>`);
   }
   if (tool.taskLogPath) {
-    extras.push(`<button type="button" class="code-mini-btn" data-local-href="${escapeHtml(tool.taskLogPath)}" data-base-dir="${escapeHtml(baseDir)}" data-preview-mode="popup">View task log</button>`);
+    extras.push(`<button type="button" class="code-mini-btn" data-local-href="${escapeHtml(tool.taskLogPath)}" data-base-dir="${escapeHtml(baseDir)}" data-preview-mode="popup">${escapeHtml(t('viewTaskLogBtn'))}</button>`);
   }
   if (extras.length > 0) {
     parts.push(`<div style="display:flex;gap:6px;flex-wrap:wrap;">${extras.join('')}</div>`);
@@ -121,11 +122,11 @@ function buildProcessItemNode(item, { theme, baseDir, expandedState }) {
     card.className = 'disclosure-card thinking-card';
     card.dataset.open = String(open);
     card.dataset.disclosureKey = item.id;
-    const statusSuffix = item.status === 'RUNNING' ? ' · thinking…' : '';
+    const statusSuffix = item.status === 'RUNNING' ? t('thinkingNowSuffix') : '';
     card.innerHTML = `
       <button type="button" class="disclosure-trigger" data-action="toggle-disclosure">
         ${CHEVON_ICON()}
-        <span class="thinking-label">Thought${statusSuffix}</span>
+        <span class="thinking-label">${escapeHtml(t('thoughtLabel'))}${escapeHtml(statusSuffix)}</span>
         <span class="thinking-preview">${escapeHtml(item.firstLine || `${item.wordCount} words`)}</span>
         <span style="font-size:0.71rem;color:var(--text-faint);flex-shrink:0;">${item.wordCount}w</span>
       </button>
@@ -160,9 +161,9 @@ function buildProcessItemNode(item, { theme, baseDir, expandedState }) {
       const showSidebarBtn = Boolean(tool.targetFile && isPreviewableFilePath(tool.targetFile));
       let actionBtnHtml = '';
       if (tool.subagentId) {
-        actionBtnHtml = `<button type="button" class="open-sidebar-pill" data-open-conv="${escapeHtml(tool.subagentId)}" title="Preview subagent conversation">View Subagent</button>`;
+        actionBtnHtml = `<button type="button" class="open-sidebar-pill" data-open-conv="${escapeHtml(tool.subagentId)}">${escapeHtml(t('viewSubagentBtn'))}</button>`;
       } else if (showSidebarBtn) {
-        actionBtnHtml = `<button type="button" class="open-sidebar-pill" data-local-href="${escapeHtml(tool.targetFile)}" data-base-dir="${escapeHtml(baseDir)}" data-preview-mode="sidebar" title="Open ${escapeHtml(tool.targetFile)} in side panel">Open in sidebar</button>`;
+        actionBtnHtml = `<button type="button" class="open-sidebar-pill" data-local-href="${escapeHtml(tool.targetFile)}" data-base-dir="${escapeHtml(baseDir)}" data-preview-mode="sidebar" title="${escapeHtml(t('openInSidebarTip', { path: tool.targetFile }))}">${escapeHtml(t('openInSidebar'))}</button>`;
       }
 
       return `<div class="tool-row" data-open="${rowOpen}" data-disclosure-key="${tool.id}">
@@ -261,7 +262,7 @@ function summarizeProcessItems(processItems, stats, isTurnRunning) {
   if (parts.length === 0) {
     parts.push(`${processItems.length} ${processItems.length === 1 ? 'step' : 'steps'}`);
   }
-  const prefix = isTurnRunning ? 'Working' : 'Execution process';
+  const prefix = isTurnRunning ? t('workingPrefix') : t('execProcessPrefix');
   return `${prefix} · ${parts.join(' · ')}`;
 }
 
@@ -270,7 +271,7 @@ function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning }
   el.className = 'turn-block';
   el.id = turn.id;
   el.dataset.turnId = turn.id;
-  el.dataset.signature = `${turnSignature(turn)}:${isTurnRunning ? 'run' : 'done'}:${baseDir}`;
+  el.dataset.signature = `${turnSignature(turn)}:${isTurnRunning ? 'run' : 'done'}:${baseDir}:${getLang()}`;
 
   const promptText = turn.user?.request || '';
   el.dataset.promptPreview = cleanTocSnippet(promptText, 18);
@@ -286,7 +287,7 @@ function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning }
     if (turn.user.mentions?.length) {
       mentionsHtml = `<div class="mention-row">${turn.user.mentions.map((m) => {
         const sideBtn = isPreviewableFilePath(m.path)
-          ? `<button type="button" class="open-sidebar-pill" data-local-href="${escapeHtml(m.path)}" data-base-dir="${escapeHtml(baseDir)}" data-preview-mode="sidebar" title="Open ${escapeHtml(m.path)} in side panel">Open in sidebar</button>`
+          ? `<button type="button" class="open-sidebar-pill" data-local-href="${escapeHtml(m.path)}" data-base-dir="${escapeHtml(baseDir)}" data-preview-mode="sidebar" title="${escapeHtml(t('openInSidebarTip', { path: m.path }))}">${escapeHtml(t('openInSidebar'))}</button>`
           : '';
         return `<span class="code-link-group"><button type="button" class="mention-chip" data-local-href="${escapeHtml(m.path)}" data-base-dir="${escapeHtml(baseDir)}" data-preview-mode="popup" title="${escapeHtml(m.path)}">@${escapeHtml(m.label)}</button>${sideBtn}</span>`;
       }).join('')}</div>`;
@@ -294,7 +295,7 @@ function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning }
 
     userCard.innerHTML = `
       <div class="user-card-header">
-        <span class="user-badge">You · Turn #${turn.index}</span>
+        <span class="user-badge">${escapeHtml(t('youTurnBadge', { index: turn.index }))}</span>
         <span>${escapeHtml(timeStr)}</span>
       </div>
       <div class="user-prompt-text">${escapeHtml(promptText || '(empty input)')}</div>
@@ -433,30 +434,30 @@ export function renderCliInsightsHtml(tab, view, cliInsights, artifacts, baseDir
 
     const artifactsHtml = (artifacts || []).length > 0
       ? `<div style="border-top:1px solid var(--border);padding-top:10px;display:flex;flex-direction:column;gap:6px;">
-          <div class="tool-section-label">Tracked Artifacts (${artifacts.length})</div>
+          <div class="tool-section-label">${escapeHtml(t('ctxTrackedArtifacts', { count: artifacts.length }))}</div>
           <div style="display:flex;gap:6px;flex-wrap:wrap;">
-            ${artifacts.map((a) => `<span class="code-link-group"><a href="#" class="local-file-link" style="font-size:0.78rem;" data-local-href="${escapeHtml(a.path)}" data-base-dir="${escapeHtml(baseDir)}" data-preview-mode="popup">${escapeHtml(a.filename)}</a><button type="button" class="open-sidebar-pill" data-local-href="${escapeHtml(a.path)}" data-base-dir="${escapeHtml(baseDir)}" data-preview-mode="sidebar">Open in sidebar</button></span>`).join('')}
+            ${artifacts.map((a) => `<span class="code-link-group"><a href="#" class="local-file-link" style="font-size:0.78rem;" data-local-href="${escapeHtml(a.path)}" data-base-dir="${escapeHtml(baseDir)}" data-preview-mode="popup">${escapeHtml(a.filename)}</a><button type="button" class="open-sidebar-pill" data-local-href="${escapeHtml(a.path)}" data-base-dir="${escapeHtml(baseDir)}" data-preview-mode="sidebar">${escapeHtml(t('openInSidebar'))}</button></span>`).join('')}
           </div>
         </div>`
       : '';
 
     return `
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:0.8rem;">
-        <div><strong>Active Model:</strong> <code>${escapeHtml(ctx.model || 'N/A')}</code> · <strong>${formatCompactTokens(ctx.used)}</strong> / ${formatCompactTokens(ctx.limit)} tokens (${pct}%)</div>
-        <div style="color:var(--text-muted);">Prompt Cache Hit: <strong>${cachePct}%</strong> (${formatCompactTokens(ctx.latestCacheRead)} cached · ${formatCompactTokens(ctx.latestUncachedInput)} new)</div>
+        <div><strong>${escapeHtml(t('ctxActiveModel'))}</strong> <code>${escapeHtml(ctx.model || 'N/A')}</code> · <strong>${formatCompactTokens(ctx.used)}</strong> / ${formatCompactTokens(ctx.limit)} tokens (${pct}%)</div>
+        <div style="color:var(--text-muted);">${escapeHtml(t('ctxPromptCache'))} <strong>${cachePct}%</strong> (${formatCompactTokens(ctx.latestCacheRead)} ${escapeHtml(t('ctxCachedWord'))} · ${formatCompactTokens(ctx.latestUncachedInput)} ${escapeHtml(t('ctxNewWord'))})</div>
       </div>
       <div class="context-layout">
         <div class="context-grid-wrap">
           <div class="context-grid-10x10" title="100 cells = ${formatCompactTokens(ctx.limit)} context window">${cells.join('')}</div>
-          <span style="font-size:0.69rem;color:var(--text-faint);text-align:center;">1 cell ≈ ${formatCompactTokens(Math.round(limit / 100))} tokens</span>
+          <span style="font-size:0.69rem;color:var(--text-faint);text-align:center;">${escapeHtml(t('ctxCellHint', { tokens: formatCompactTokens(Math.round(limit / 100)) }))}</span>
         </div>
         <div class="context-breakdown-table">
-          <div class="ctx-row"><span><span class="ctx-dot" style="background:#7b8494;"></span>System, Tools &amp; Customizations</span><strong>${formatCompactTokens(cats.systemOverhead)}</strong></div>
-          <div class="ctx-row"><span><span class="ctx-dot" style="background:var(--info);"></span>User messages</span><strong>${formatCompactTokens(cats.userMessages)}</strong></div>
-          <div class="ctx-row"><span><span class="ctx-dot" style="background:var(--accent);"></span>Agent responses &amp; thinking</span><strong>${formatCompactTokens(cats.agentResponses)}</strong></div>
-          <div class="ctx-row"><span><span class="ctx-dot" style="background:var(--warning);"></span>Tool calls &amp; outputs</span><strong>${formatCompactTokens(cats.toolCalls)}</strong></div>
-          <div class="ctx-row"><span><span class="ctx-dot" style="border:1px solid var(--border-strong);background:var(--bg-surface);"></span>Free context capacity</span><strong>${formatCompactTokens(cats.freeSpace)}</strong></div>
-          ${ctx.checkpointCount ? `<div class="ctx-row"><span>Checkpoints compacted (${ctx.checkpointCount})</span><strong>${formatCompactTokens(ctx.checkpointBufferTokens)} buffer</strong></div>` : ''}
+          <div class="ctx-row"><span><span class="ctx-dot" style="background:#7b8494;"></span>${escapeHtml(t('ctxRowSys'))}</span><strong>${formatCompactTokens(cats.systemOverhead)}</strong></div>
+          <div class="ctx-row"><span><span class="ctx-dot" style="background:var(--info);"></span>${escapeHtml(t('ctxRowUser'))}</span><strong>${formatCompactTokens(cats.userMessages)}</strong></div>
+          <div class="ctx-row"><span><span class="ctx-dot" style="background:var(--accent);"></span>${escapeHtml(t('ctxRowAgent'))}</span><strong>${formatCompactTokens(cats.agentResponses)}</strong></div>
+          <div class="ctx-row"><span><span class="ctx-dot" style="background:var(--warning);"></span>${escapeHtml(t('ctxRowTools'))}</span><strong>${formatCompactTokens(cats.toolCalls)}</strong></div>
+          <div class="ctx-row"><span><span class="ctx-dot" style="border:1px solid var(--border-strong);background:var(--bg-surface);"></span>${escapeHtml(t('ctxRowFree'))}</span><strong>${formatCompactTokens(cats.freeSpace)}</strong></div>
+          ${ctx.checkpointCount ? `<div class="ctx-row"><span>${escapeHtml(t('ctxRowCheckpoints', { count: ctx.checkpointCount }))}</span><strong>${formatCompactTokens(ctx.checkpointBufferTokens)} buffer</strong></div>` : ''}
         </div>
       </div>
       ${artifactsHtml}
@@ -472,7 +473,7 @@ export function renderCliInsightsHtml(tab, view, cliInsights, artifacts, baseDir
     const renderWinCard = (label, win) => {
       const fams = (win.families || []).map((f) =>
         `<div style="display:flex;justify-content:space-between;font-size:0.75rem;"><span>${escapeHtml(f.family)} (${f.calls} calls)</span><strong>${formatCompactTokens(f.totalTokens)}</strong></div>`
-      ).join('') || `<div style="font-size:0.75rem;color:var(--text-faint);">No recorded token activity in window</div>`;
+      ).join('') || `<div style="font-size:0.75rem;color:var(--text-faint);">—</div>`;
       return `<div class="usage-window-card">
         <div style="display:flex;justify-content:space-between;align-items:center;">
           <span class="tool-section-label">${escapeHtml(label)}</span>
@@ -492,14 +493,14 @@ export function renderCliInsightsHtml(tab, view, cliInsights, artifacts, baseDir
         <td>${formatCompactTokens(m.outputTokens)}</td>
         <td><strong>${formatCompactTokens(m.totalTokens)}</strong></td>
       </tr>
-    `).join('') || `<tr><td colspan="6" style="color:var(--text-faint);">No model token telemetry recorded in this session yet.</td></tr>`;
+    `).join('') || `<tr><td colspan="6" style="color:var(--text-faint);">—</td></tr>`;
 
     return `
       <div class="usage-window-grid">
-        ${renderWinCard('Last 5 Hours (Shared 5h Window)', w5)}
-        ${renderWinCard('Last 7 Days (Shared Weekly Window)', w7)}
+        ${renderWinCard(t('usageWin5h'), w5)}
+        ${renderWinCard(t('usageWin7d'), w7)}
       </div>
-      <div class="tool-section-label" style="margin-top:4px;">Current Session Per-Model Consumption</div>
+      <div class="tool-section-label" style="margin-top:4px;">${escapeHtml(t('usagePerModel'))}</div>
       <div class="table-wrap" style="border:1px solid var(--border);border-radius:8px;">
         <table style="width:100%;border-collapse:collapse;font-size:0.78rem;">
           <thead>
@@ -515,7 +516,7 @@ export function renderCliInsightsHtml(tab, view, cliInsights, artifacts, baseDir
           <tbody>${rows}</tbody>
         </table>
       </div>
-      <div style="font-size:0.73rem;color:var(--text-faint);">Tip: Local rolling token totals are aggregated directly from session logs; run <code>/usage</code> in the interactive CLI to refresh live cloud quota percentages.</div>
+      <div style="font-size:0.73rem;color:var(--text-faint);">${t('usageTip')}</div>
     `;
   }
 
@@ -541,12 +542,12 @@ export function renderCliInsightsHtml(tab, view, cliInsights, artifacts, baseDir
         </div>
         <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
           ${metaBadges.join('')}
-          ${!matchedNote ? `<button type="button" class="code-mini-btn" data-action="prefill-btw-question" data-question="${escapeHtml(c.question)}">粘贴回答 (/copy btw)</button>` : `<button type="button" class="code-mini-btn" data-action="delete-btw-note" data-note-id="${escapeHtml(matchedNote.id)}">✕</button>`}
+          ${!matchedNote ? `<button type="button" class="code-mini-btn" data-action="prefill-btw-question" data-question="${escapeHtml(c.question)}">${escapeHtml(t('btwAttachBtn'))}</button>` : `<button type="button" class="code-mini-btn" data-action="delete-btw-note" data-note-id="${escapeHtml(matchedNote.id)}">✕</button>`}
         </div>
       </div>
       ${matchedNote
         ? `<div class="assistant-markdown" style="font-size:0.88rem;padding-top:8px;border-top:1px solid var(--border);">${renderMarkdownHtml(matchedNote.answer, { baseDir })}</div>`
-        : `<div style="font-size:0.74rem;color:var(--text-faint);">新提问的 <code>/btw</code> 回答将由插件 Hook 自动捕获保存；历史提问可在 CLI 执行 <code>/copy btw</code> 后点击右侧按钮粘贴固定。</div>`}
+        : `<div style="font-size:0.74rem;color:var(--text-faint);">${t('btwAutoHint')}</div>`}
     </div>`;
   }).join('');
 
@@ -558,21 +559,21 @@ export function renderCliInsightsHtml(tab, view, cliInsights, artifacts, baseDir
           <span class="tool-name-pill" style="color:var(--accent);border-color:var(--accent-border);background:var(--accent-soft);">/btw</span>
           <strong style="font-size:0.85rem;">${escapeHtml(n.question || 'Saved Side Answer')}</strong>
         </div>
-        <button type="button" class="code-mini-btn" data-action="delete-btw-note" data-note-id="${escapeHtml(n.id)}">Remove</button>
+        <button type="button" class="code-mini-btn" data-action="delete-btw-note" data-note-id="${escapeHtml(n.id)}">✕</button>
       </div>
       <div class="assistant-markdown" style="font-size:0.88rem;padding-top:8px;border-top:1px solid var(--border);">${renderMarkdownHtml(n.answer, { baseDir })}</div>
     </div>`).join('');
 
   return `
-    ${cmdItemsHtml || standaloneNotesHtml ? (cmdItemsHtml + standaloneNotesHtml) : `<div style="font-size:0.8rem;color:var(--text-muted);">当前会话暂无 <code>/btw</code> 侧边提问记录。在 CLI 中输入 <code>/btw &lt;问题&gt;</code> 后将自动在此归档显示。</div>`}
+    ${cmdItemsHtml || standaloneNotesHtml ? (cmdItemsHtml + standaloneNotesHtml) : `<div style="font-size:0.8rem;color:var(--text-muted);">${t('btwEmpty')}</div>`}
     <details data-btw-manual-details style="margin-top:2px;">
-      <summary style="cursor:pointer;font-size:0.76rem;color:var(--accent);font-weight:600;user-select:none;">+ 手动粘贴保存 <code>/copy btw</code> 问答记录</summary>
+      <summary style="cursor:pointer;font-size:0.76rem;color:var(--accent);font-weight:600;user-select:none;">${t('btwManualSummary')}</summary>
       <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px;">
-        <input type="text" class="input-sm" data-btw-q-input placeholder="提问内容（可选）">
-        <textarea class="paste-area" style="min-height:84px;" data-btw-a-input placeholder="在 CLI 运行 /copy btw 后粘贴 Markdown 回答内容…"></textarea>
+        <input type="text" class="input-sm" data-btw-q-input placeholder="${escapeHtml(t('btwQuestionPlaceholder'))}">
+        <textarea class="paste-area" style="min-height:84px;" data-btw-a-input placeholder="${escapeHtml(t('btwAnswerPlaceholder'))}"></textarea>
         <div style="display:flex;justify-content:flex-end;gap:6px;">
-          <button type="button" class="code-mini-btn" data-action="paste-clipboard-btw">从剪贴板读取</button>
-          <button type="button" class="pill-btn primary" data-action="save-btw-note">保存回答</button>
+          <button type="button" class="code-mini-btn" data-action="paste-clipboard-btw">${escapeHtml(t('btwPasteClipBtn'))}</button>
+          <button type="button" class="pill-btn primary" data-action="save-btw-note">${escapeHtml(t('btwSaveBtn'))}</button>
         </div>
       </div>
     </details>
@@ -874,19 +875,19 @@ export class TranscriptRenderer {
     const s = view.summary || {};
     const totalTokens = (s.totalInputTokens || 0) + (s.totalCacheReadTokens || 0) + (s.totalOutputTokens || 0);
     const parentLinkHtml = parentSession
-      ? `<button type="button" class="open-sidebar-pill" data-open-conv="${escapeHtml(parentSession.id)}" title="Return to parent session">← Parent: ${escapeHtml(parentSession.title.slice(0, 32))}</button>`
+      ? `<button type="button" class="open-sidebar-pill" data-open-conv="${escapeHtml(parentSession.id)}">${escapeHtml(t('parentBtn', { title: parentSession.title.slice(0, 32) }))}</button>`
       : '';
     ribbon.innerHTML = `
       <div class="ribbon-stats">
         ${parentLinkHtml}
-        <span class="ribbon-stat"><strong>${s.totalTurns || 0}</strong> turns</span>
-        <span class="ribbon-stat"><strong>${s.totalSteps || 0}</strong> steps</span>
-        <span class="ribbon-stat"><strong>${s.totalToolCalls || 0}</strong> tools</span>
-        ${subagents.length > 0 ? `<span class="ribbon-stat"><strong>${subagents.length}</strong> subagents</span>` : ''}
-        ${s.totalErrors ? `<span class="ribbon-stat" style="color:var(--error);"><strong>${s.totalErrors}</strong> errors</span>` : ''}
-        ${totalTokens > 0 ? `<span class="ribbon-stat"><strong>${formatCompactTokens(totalTokens)}</strong> tokens</span>` : ''}
+        <span class="ribbon-stat"><strong>${s.totalTurns || 0}</strong> ${escapeHtml(t('turnsStat'))}</span>
+        <span class="ribbon-stat"><strong>${s.totalSteps || 0}</strong> ${escapeHtml(t('stepsStat'))}</span>
+        <span class="ribbon-stat"><strong>${s.totalToolCalls || 0}</strong> ${escapeHtml(t('toolsStat'))}</span>
+        ${subagents.length > 0 ? `<span class="ribbon-stat"><strong>${subagents.length}</strong> ${escapeHtml(t('subagentsStat'))}</span>` : ''}
+        ${s.totalErrors ? `<span class="ribbon-stat" style="color:var(--error);"><strong>${s.totalErrors}</strong> ${escapeHtml(t('errorsStat'))}</span>` : ''}
+        ${totalTokens > 0 ? `<span class="ribbon-stat"><strong>${formatCompactTokens(totalTokens)}</strong> ${escapeHtml(t('tokensStat'))}</span>` : ''}
       </div>
-      <div style="font-size:0.72rem;color:var(--text-faint);">Execution process auto-collapsed</div>
+      <div style="font-size:0.72rem;color:var(--text-faint);">${escapeHtml(t('autoCollapsedNote'))}</div>
     `;
 
     // Subagents collapsible overview card inside Session Preview (collapsed by default!)
@@ -905,7 +906,7 @@ export class TranscriptRenderer {
         <button type="button" class="process-fold-trigger" data-action="toggle-process">
           <span class="tool-group-left">
             ${CHEVRON_SVG}
-            <span class="process-fold-title">Subagents invoked in this session (${subagents.length})</span>
+            <span class="process-fold-title">${escapeHtml(t('subagentsBannerTitle', { count: subagents.length }))}</span>
           </span>
           <span class="tool-status-pill done">${subagents.length}</span>
         </button>
@@ -914,9 +915,9 @@ export class TranscriptRenderer {
             <div class="subagent-inline-item">
               <div style="min-width:0;flex:1;">
                 <div style="font-size:0.8rem;font-weight:550;color:var(--text-main);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(sub.title)}</div>
-                <div style="font-size:0.71rem;color:var(--text-faint);">${escapeHtml(sub.agentName || 'subagent')} · ${sub.stepCount || 0} steps · ${escapeHtml(sub.id.slice(0, 8))}</div>
+                <div style="font-size:0.71rem;color:var(--text-faint);">${escapeHtml(sub.agentName || 'subagent')} · ${sub.stepCount || 0} ${escapeHtml(t('stepsStat'))} · ${escapeHtml(sub.id.slice(0, 8))}</div>
               </div>
-              <button type="button" class="open-sidebar-pill" data-open-conv="${escapeHtml(sub.id)}">Open Subagent</button>
+              <button type="button" class="open-sidebar-pill" data-open-conv="${escapeHtml(sub.id)}">${escapeHtml(t('openSubagentBtn'))}</button>
             </div>
           `).join('')}
         </div>
@@ -935,7 +936,7 @@ export class TranscriptRenderer {
         loadBtn.dataset.action = 'load-earlier-turns';
         anchorAfterRibbon.after(loadBtn);
       }
-      loadBtn.textContent = `Show earlier turns (${startIdx} hidden for speed)`;
+      loadBtn.textContent = t('showEarlierTurns', { count: startIdx });
     } else if (loadBtn) {
       loadBtn.remove();
     }
@@ -953,7 +954,7 @@ export class TranscriptRenderer {
     for (const turn of visibleTurns) {
       const hasFinalMarkdown = turn.items.some((it) => it.kind === 'markdown' && !it.intermediate);
       const isTurnRunning = turn.id === lastTurn?.id && (isRunning || view?.summary?.activeStatus === 'running') && !hasFinalMarkdown;
-      const sig = `${turnSignature(turn)}:${isTurnRunning ? 'run' : 'done'}:${this.baseDir}`;
+      const sig = `${turnSignature(turn)}:${isTurnRunning ? 'run' : 'done'}:${this.baseDir}:${getLang()}`;
       const existing = existingById.get(turn.id);
       if (existing && existing.dataset.signature === sig) {
         continue;

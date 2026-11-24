@@ -2,6 +2,12 @@
 
 All notable changes to **Antigravity Markdown Preview (`agy-markdown-preview`)** will be documented in this file.
 
+## [0.2.1] - 2026-11-24
+
+### Added
+- **Unified Persistent `Preferences` Menu**: Consolidated persistent display settings (`Language`, `Font: Sans / Serif`, `Width: Normal / Wide`, `Tables: Fit / Expand`, `2` Light/Dark modes, and `8` Color Palettes separated by dividers) into a single `Preferences ▾` dropdown immediately to the left of `↻ Sync`.
+- **Full Bilingual UI Localization (`English` Default / `简体中文`)**: Added `public/js/i18n.js` synchronizing all topbar controls, sidebar menus, Mermaid fullscreen/zoom tooltips (`⛶ Fullscreen` / `⛶ 大屏预览`), file preview actions (`📂 Folder` / `📂 目录`), and `/btw` · `/context` · `/usage` inspector labels in real time without page reloads.
+
 ## [0.2.0] - 2026-11-24
 
 ### Added

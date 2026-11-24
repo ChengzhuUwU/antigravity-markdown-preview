@@ -8,9 +8,8 @@ Transform dense terminal streams, 1,000+ step agent trajectories, LaTeX math, wi
 
 ## Highlights
 
-- **2 × 8 Customizable Theme System**:
-  - Switch effortlessly between **2 brightness modes (`Light` / `Dark`)** and **8 curated color palettes** (`Parchment · 暖陶`, `Lavender · 淡紫`, `Sakura · 淡粉`, `Matcha · 淡翠`, `Glacier · 雾蓝`, `Amber · 暖杏`, `Celadon · 青瓷`, `Slate · 冷岩`) — 16 harmonious reading surfaces in total.
-  - Toggle `Sans` / `Serif` prose typography (`F`) and `Normal` / `Wide` reading column (`W`).
+- **Unified `Preferences` Menu & Bilingual UI (`English` / `简体中文`)**:
+  - Single persistent **`Preferences ▾`** dropdown placed directly to the left of `↻ Sync`, consolidating **Language (`English` default / `简体中文`)**, **Typography & Layout (`Font: Sans / Serif`, `Width: Normal / Wide`, `Tables: Fit / Expand`)**, **2 Appearance Modes (`Light` / `Dark`)**, and **8 Color Palettes** (`Parchment`, `Lavender`, `Sakura`, `Matcha`, `Glacier`, `Amber`, `Celadon`, `Slate`) — 16 harmonious reading surfaces in total.
 - **Auto-Folded Execution & Project Grouping**:
   - Groups sessions by workspace project (auto-expanding projects active in the last 3 days) and folds subagents cleanly under `▸ N subagents` while keeping them accessible inside the session view (`View Subagent` / `← Parent`).
   - Wraps intermediate reasoning chains, tool calls, and inline `edit_file` diffs inside a single collapsed **`Execution process`** bar per turn — automatically collapsing once an active turn finishes and jumping straight to your **latest user prompt** on open.
@@ -20,7 +19,7 @@ Transform dense terminal streams, 1,000+ step agent trajectories, LaTeX math, wi
   - **`/usage`**: Rolling **5-Hour** & **7-Day** local token usage grouped by model family (`Gemini` vs `Claude / GPT`) alongside per-model session tables.
   - **`/btw`**: Surfaces CLI `/btw` side questions from `history.jsonl` and lets you pin `/copy btw` Markdown answers directly to the conversation.
 - **Dual File Previews & Persistent `Docs / Clips` Shelf**:
-  - Click any local hyperlink to inspect it in a **Popup Preview Modal**, or click **`Open in sidebar`** (supported across Markdown docs, code files with `#L16-L20` line-range highlighting, and images) to pin it in the resizable **Right Split Pane** — complete with one-click **`📂 目录` (Reveal in Explorer/Finder)**.
+  - Click any local hyperlink to inspect it in a **Popup Preview Modal**, or click **`Open in sidebar`** (supported across Markdown docs, code files with `#L16-L20` line-range highlighting, and images) to pin it in the resizable **Right Split Pane** — complete with one-click **`📂 Folder` (Reveal in Explorer/Finder)**.
   - Dedicated **`Docs / Clips`** workspace persisted in OS user data (`%APPDATA%/agy-markdown-preview` on Windows, `~/Library/Application Support/...` on macOS, `~/.local/share/...` on Linux) featuring pointer-hover previews, drag-and-drop sorting, inline renaming, and native file picking.
 - **Publication-Grade Offline Markdown & Mermaid v12 ELK**:
   - Zero-CDN offline `marked` + `highlight.js` + `KaTeX` (`$...$`, `$$...$$`, `\(...\)`, `\[...\]`) + **Mermaid v12 (`ELK` orthogonal port routing, rounded 90° elbows, multi-stage pastel pills, interactive pan/zoom, fullscreen canvas, and vector SVG export)**.

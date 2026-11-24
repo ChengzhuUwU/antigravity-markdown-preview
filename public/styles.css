@@ -2373,3 +2373,53 @@ mark.find-hit.current {
   flex-shrink: 0;
   display: inline-block;
 }
+
+.prefs-menu {
+  width: 268px;
+  max-height: 82vh;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.prefs-control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 6px;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+.prefs-seg-group {
+  display: inline-flex;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.prefs-seg-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.72rem;
+  font-weight: 550;
+  padding: 2px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.prefs-seg-btn:hover {
+  color: var(--text-main);
+}
+
+.prefs-seg-btn.active {
+  background: var(--bg-surface);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+  font-weight: 600;
+}

@@ -1,3 +1,4 @@
+import { applyStaticI18n, getLang, setLang, t } from './i18n.js';
 import {
   escapeHtml,
   slugifyHeading,
@@ -16,14 +17,14 @@ const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
 const CHEVRON_SVG = `<svg class="chevron-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5L10.5 8 6 12.5"/></svg>`;
 
 const THEME_PALETTES = [
-  { id: 'parchment', label: 'Parchment · 暖陶', lightBg: '#faf9f5', darkBg: '#141413', accent: '#c96442' },
-  { id: 'lavender', label: 'Lavender · 淡紫', lightBg: '#f8f6fc', darkBg: '#14121b', accent: '#7c5cbf' },
-  { id: 'sakura', label: 'Sakura · 淡粉', lightBg: '#fcf6f8', darkBg: '#191215', accent: '#c9597a' },
-  { id: 'matcha', label: 'Matcha · 淡翠', lightBg: '#f5f9f6', darkBg: '#111714', accent: '#3b825f' },
-  { id: 'glacier', label: 'Glacier · 雾蓝', lightBg: '#f4f8fc', darkBg: '#11161d', accent: '#3874b5' },
-  { id: 'amber', label: 'Amber · 暖杏', lightBg: '#fcf8f2', darkBg: '#181410', accent: '#b87328' },
-  { id: 'celadon', label: 'Celadon · 青瓷', lightBg: '#f3f9f9', darkBg: '#101718', accent: '#298088' },
-  { id: 'slate', label: 'Slate · 冷岩', lightBg: '#f8f9fa', darkBg: '#121316', accent: '#475569' },
+  { id: 'parchment', lightBg: '#faf9f5', darkBg: '#141413', accent: '#c96442' },
+  { id: 'lavender', lightBg: '#f8f6fc', darkBg: '#14121b', accent: '#7c5cbf' },
+  { id: 'sakura', lightBg: '#fcf6f8', darkBg: '#191215', accent: '#c9597a' },
+  { id: 'matcha', lightBg: '#f5f9f6', darkBg: '#111714', accent: '#3b825f' },
+  { id: 'glacier', lightBg: '#f4f8fc', darkBg: '#11161d', accent: '#3874b5' },
+  { id: 'amber', lightBg: '#fcf8f2', darkBg: '#181410', accent: '#b87328' },
+  { id: 'celadon', lightBg: '#f3f9f9', darkBg: '#101718', accent: '#298088' },
+  { id: 'slate', lightBg: '#f8f9fa', darkBg: '#121316', accent: '#475569' },
 ];
 
 function initialThemeMode() {
@@ -74,18 +75,53 @@ function resolvedTheme() {
   return state.theme === 'dark' ? 'dark' : 'light';
 }
 
-function renderThemeMenu() {
-  const menu = el('theme-menu');
+function renderPrefsMenu() {
+  const menu = el('prefs-menu');
   if (!menu) return;
   const isDark = resolvedTheme() === 'dark';
+  const lang = getLang();
+
+  const langSegHtml = `
+    <div class="prefs-control-row">
+      <span class="prefs-control-label">${escapeHtml(t('secLanguage'))}</span>
+      <div class="prefs-seg-group">
+        <button type="button" class="prefs-seg-btn ${lang === 'en' ? 'active' : ''}" data-pref-lang="en">English</button>
+        <button type="button" class="prefs-seg-btn ${lang === 'zh' ? 'active' : ''}" data-pref-lang="zh">简体中文</button>
+      </div>
+    </div>
+  `;
+
+  const typoRowsHtml = `
+    <div class="prefs-control-row">
+      <span class="prefs-control-label">${escapeHtml(t('lblFont'))}</span>
+      <div class="prefs-seg-group">
+        <button type="button" class="prefs-seg-btn ${state.prose === 'sans' ? 'active' : ''}" data-pref-prose="sans">${escapeHtml(t('fontSans'))}</button>
+        <button type="button" class="prefs-seg-btn ${state.prose === 'serif' ? 'active' : ''}" data-pref-prose="serif">${escapeHtml(t('fontSerif'))}</button>
+      </div>
+    </div>
+    <div class="prefs-control-row">
+      <span class="prefs-control-label">${escapeHtml(t('lblWidth'))}</span>
+      <div class="prefs-seg-group">
+        <button type="button" class="prefs-seg-btn ${state.width === 'normal' ? 'active' : ''}" data-pref-width="normal">${escapeHtml(t('widthNormal'))}</button>
+        <button type="button" class="prefs-seg-btn ${state.width === 'wide' ? 'active' : ''}" data-pref-width="wide">${escapeHtml(t('widthWide'))}</button>
+      </div>
+    </div>
+    <div class="prefs-control-row">
+      <span class="prefs-control-label">${escapeHtml(t('lblTables'))}</span>
+      <div class="prefs-seg-group">
+        <button type="button" class="prefs-seg-btn ${state.tables === 'compact' ? 'active' : ''}" data-pref-tables="compact">${escapeHtml(t('tablesFit'))}</button>
+        <button type="button" class="prefs-seg-btn ${state.tables === 'expand' ? 'active' : ''}" data-pref-tables="expand">${escapeHtml(t('tablesExpand'))}</button>
+      </div>
+    </div>
+  `;
 
   const modeItemsHtml = [
-    { id: 'light', label: '☀ Light · 浅色' },
-    { id: 'dark', label: '🌙 Dark · 深色' },
+    { id: 'light', label: t('modeLight') },
+    { id: 'dark', label: t('modeDark') },
   ].map((m) => {
     const active = state.theme === m.id;
     return `<button type="button" class="theme-menu-item ${active ? 'active' : ''}" data-theme-mode="${m.id}">
-      <span>${m.label}</span>
+      <span>${escapeHtml(m.label)}</span>
       <span>${active ? '✓' : ''}</span>
     </button>`;
   }).join('');
@@ -97,17 +133,22 @@ function renderThemeMenu() {
     return `<button type="button" class="theme-menu-item ${active ? 'active' : ''}" data-theme-palette="${p.id}">
       <span class="theme-menu-item-left">
         <span class="palette-dual-swatch" style="background:${grad};"></span>
-        <span>${escapeHtml(p.label)}</span>
+        <span>${escapeHtml(t(`pal_${p.id}`))}</span>
       </span>
       <span>${active ? '✓' : ''}</span>
     </button>`;
   }).join('');
 
   menu.innerHTML = `
-    <div class="theme-menu-section-label">Mode (2)</div>
+    ${langSegHtml}
+    <div class="theme-menu-divider"></div>
+    <div class="theme-menu-section-label">${escapeHtml(t('secTypography'))}</div>
+    ${typoRowsHtml}
+    <div class="theme-menu-divider"></div>
+    <div class="theme-menu-section-label">${escapeHtml(t('secMode'))}</div>
     ${modeItemsHtml}
     <div class="theme-menu-divider"></div>
-    <div class="theme-menu-section-label">Color Palette (8)</div>
+    <div class="theme-menu-section-label">${escapeHtml(t('secPalette'))}</div>
     ${paletteItemsHtml}
   `;
 }
@@ -123,12 +164,6 @@ function applyAppearance() {
   document.documentElement.setAttribute('data-tables', state.tables);
   document.documentElement.setAttribute('data-prose', state.prose);
 
-  const tablesBtn = el('tables-btn');
-  if (tablesBtn) {
-    tablesBtn.textContent = state.tables === 'expand' ? 'Tables: Expand' : 'Tables: Fit';
-    tablesBtn.classList.toggle('active', state.tables === 'expand');
-  }
-
   const hljsLight = el('hljs-light-css');
   const hljsDark = el('hljs-dark-css');
   if (hljsLight && hljsDark) {
@@ -137,14 +172,58 @@ function applyAppearance() {
   }
 
   const palObj = THEME_PALETTES.find((p) => p.id === validPalette) || THEME_PALETTES[0];
-  const themeLabel = el('theme-btn-label');
-  if (themeLabel) {
-    const shortPal = palObj.label.split('·')[0].trim();
-    themeLabel.textContent = `${effectiveTheme === 'dark' ? 'Dark' : 'Light'} · ${shortPal}`;
+  const swatchEl = el('prefs-btn-swatch');
+  if (swatchEl) {
+    const bgHex = effectiveTheme === 'dark' ? palObj.darkBg : palObj.lightBg;
+    swatchEl.style.background = `linear-gradient(135deg, ${bgHex} 50%, ${palObj.accent} 50%)`;
   }
-  renderThemeMenu();
+  const prefsLabel = el('prefs-btn-label');
+  if (prefsLabel) {
+    prefsLabel.textContent = t('prefsBtn');
+  }
+  renderPrefsMenu();
   transcriptRenderer?.setTheme(effectiveTheme);
   rethemeMermaidDiagrams(effectiveTheme);
+}
+
+function applyLanguage(nextLang) {
+  setLang(nextLang);
+  applyStaticI18n();
+  const manageBtn = el('docs-manage-btn');
+  if (manageBtn) {
+    manageBtn.textContent = state.docsManageMode ? t('manageDoneBtn') : t('manageBtn');
+  }
+  const popupWrap = el('popup-wrap-btn');
+  if (popupWrap) {
+    popupWrap.textContent = el('popup-code-view')?.classList.contains('wrapped') ? t('unwrapBtn') : t('wrapBtn');
+  }
+  const sideWrap = el('side-wrap-btn');
+  if (sideWrap) {
+    sideWrap.textContent = el('side-code-view')?.classList.contains('wrapped') ? t('unwrapBtn') : t('wrapBtn');
+  }
+  applyAppearance();
+  if (state.eventSource) {
+    applyHookPhase(state.currentViewData?.hookState);
+  }
+  renderSidebarList();
+  renderCliToolsDrawer();
+
+  if (state.mode === 'sessions' && transcriptRenderer?.lastView) {
+    transcriptRenderer._rerenderCurrent();
+  } else if (state.mode === 'docs') {
+    if (state.currentCustomDoc) {
+      renderCustomPreview(state.currentCustomDoc);
+    } else {
+      el('doc-title').textContent = t('tabDocs');
+      el('reader-column').innerHTML = `<div class="empty-state"><strong>${escapeHtml(t('docsEmptyTitle'))}</strong><span>${t('docsEmptyHint')}</span></div>`;
+    }
+  }
+  if (state.sideCurrent && !el('side-preview-pane')?.classList.contains('hidden')) {
+    populatePreviewBody(el('side-preview-body'), state.sideCurrent, 'side-code-view');
+  }
+  if (state.popupCurrent && !el('file-preview-modal')?.classList.contains('hidden')) {
+    populatePreviewBody(el('popup-preview-body'), state.popupCurrent, 'popup-code-view');
+  }
 }
 
 let transcriptRenderer = null;
@@ -163,21 +242,25 @@ function formatCompactDate(ms) {
   if (!ms) return '';
   const d = new Date(ms);
   const now = new Date();
+  const locale = getLang() === 'zh' ? 'zh-CN' : 'en-US';
   if (d.toDateString() === now.toDateString()) {
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' });
   }
   const diffDays = Math.floor((Date.now() - ms) / (24 * 3600 * 1000));
   if (diffDays < 7) {
+    if (getLang() === 'zh') {
+      return diffDays === 0 ? '今天' : `${diffDays}天前`;
+    }
     return diffDays === 0 ? 'Today' : `${diffDays}d ago`;
   }
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return d.toLocaleDateString(locale, { month: 'short', day: 'numeric' });
 }
 
 function renderToc(items) {
   const list = el('toc-list');
   if (!list) return;
   if (!items || items.length === 0) {
-    list.innerHTML = `<div style="font-size:0.75rem;color:var(--text-faint);padding:4px 6px;">No outline headings yet</div>`;
+    list.innerHTML = `<div style="font-size:0.75rem;color:var(--text-faint);padding:4px 6px;">${escapeHtml(t('noOutline'))}</div>`;
     return;
   }
   list.innerHTML = items.map((it) =>
@@ -239,7 +322,7 @@ function renderSessionButtonHtml(c) {
       <span class="session-title-text">${escapeHtml(c.title)}</span>
     </div>
     <div class="session-meta-line">
-      <span>${escapeHtml(c.id.slice(0, 8))}${c.stepCount ? ` · ${c.stepCount} steps` : ''}</span>
+      <span>${escapeHtml(c.id.slice(0, 8))}${c.stepCount ? ` · ${c.stepCount} ${escapeHtml(t('stepsStat'))}` : ''}</span>
       <span>${escapeHtml(timeStr)}</span>
     </div>
   </button>`;
@@ -292,12 +375,12 @@ function renderSidebarList() {
       (p.excerpt || '').toLowerCase().includes(query)
     );
     if (filtered.length === 0) {
-      container.innerHTML = `<div style="padding:16px 10px;font-size:0.78rem;color:var(--text-faint);">No standalone Markdown or CLI clips yet.<br><br>Click <strong>📂 Browse…</strong>, <strong>+ Open / Paste</strong>, or drag any <code>.md</code> / <code>.jsonl</code> file onto this window.</div>`;
+      container.innerHTML = `<div style="padding:16px 10px;font-size:0.78rem;color:var(--text-faint);">${t('noDocsYet')}</div>`;
       return;
     }
 
     const storageFooterHtml = state.docsStoragePath
-      ? `<div style="margin-top:auto;padding:10px 6px 4px;font-size:0.68rem;color:var(--text-faint);border-top:1px dashed var(--border);word-break:break-all;" title="${escapeHtml(state.docsStoragePath)}">💾 Saved in: <code>${escapeHtml(state.docsStoragePath)}</code></div>`
+      ? `<div style="margin-top:auto;padding:10px 6px 4px;font-size:0.68rem;color:var(--text-faint);border-top:1px dashed var(--border);word-break:break-all;" title="${escapeHtml(state.docsStoragePath)}">${escapeHtml(t('savedIn'))} <code>${escapeHtml(state.docsStoragePath)}</code></div>`
       : '';
 
     container.innerHTML = filtered.map((doc) => {
@@ -358,7 +441,7 @@ function renderSidebarList() {
   });
 
   if (filtered.length === 0) {
-    container.innerHTML = `<div style="padding:16px 10px;font-size:0.78rem;color:var(--text-faint);">No matching sessions or user prompts found.</div>`;
+    container.innerHTML = `<div style="padding:16px 10px;font-size:0.78rem;color:var(--text-faint);">${escapeHtml(t('noSessionsMatch'))}</div>`;
     return;
   }
 
@@ -426,8 +509,9 @@ function renderSidebarList() {
       if (childSubs.length > 0) {
         const subGroupKey = `parent:${rootConv.id}`;
         const subExpanded = Boolean(query) || state.expandedSubagentGroups.has(subGroupKey) || childSubs.some((s) => s.id === state.activeConvId);
+        const subUnit = childSubs.length === 1 ? t('subagentUnit') : t('subagentsUnit');
         subHtml = `<button type="button" class="subagent-group-toggle" data-toggle-subagents="${escapeHtml(subGroupKey)}">
-            <span>${subExpanded ? '▾' : '▸'} ${childSubs.length} ${childSubs.length === 1 ? 'subagent' : 'subagents'}</span>
+            <span>${subExpanded ? '▾' : '▸'} ${childSubs.length} ${escapeHtml(subUnit)}</span>
           </button>
           ${subExpanded ? childSubs.map(renderSessionButtonHtml).join('') : ''}`;
       }
@@ -438,14 +522,15 @@ function renderSidebarList() {
     if (orphanSubs.length > 0) {
       const orphanKey = `orphan:${grp.key}`;
       const orphanOpen = Boolean(query) || state.expandedSubagentGroups.has(orphanKey) || orphanSubs.some((s) => s.id === state.activeConvId);
+      const orphanUnit = orphanSubs.length === 1 ? t('standaloneSubagentUnit') : t('standaloneSubagentsUnit');
       orphanHtml = `<button type="button" class="subagent-group-toggle" data-toggle-subagents="${escapeHtml(orphanKey)}">
-          <span>${orphanOpen ? '▾' : '▸'} ${orphanSubs.length} standalone ${orphanSubs.length === 1 ? 'subagent' : 'subagents'}</span>
+          <span>${orphanOpen ? '▾' : '▸'} ${orphanSubs.length} ${escapeHtml(orphanUnit)}</span>
         </button>
         ${orphanOpen ? orphanSubs.map(renderSessionButtonHtml).join('') : ''}`;
     }
 
     const olderBtnHtml = hiddenRootCount > 0
-      ? `<button type="button" class="show-older-sessions-btn" data-show-older-project="${escapeHtml(grp.key)}">+ Show ${hiddenRootCount} older ${hiddenRootCount === 1 ? 'session' : 'sessions'} (&gt;3d)</button>`
+      ? `<button type="button" class="show-older-sessions-btn" data-show-older-project="${escapeHtml(grp.key)}">${escapeHtml(t('olderSessionsBtn', { count: hiddenRootCount, unit: hiddenRootCount === 1 ? t('sessionUnit') : t('sessionsUnit') }))}</button>`
       : '';
 
     const displayCount = rootAll.length || grp.items.length;
@@ -491,7 +576,7 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
   state.eventSource = es;
 
   es.addEventListener('connected', () => {
-    setLiveBadge('● Live Sync', 'live');
+    setLiveBadge(t('liveSync'), 'live');
   });
 
   es.addEventListener('transcript', (ev) => {
@@ -570,28 +655,28 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
   });
 
   es.onerror = () => {
-    setLiveBadge('Reconnecting…', 'idle');
+    setLiveBadge(t('reconnecting'), 'idle');
   };
 }
 
 function applyHookPhase(hookState) {
   if (!hookState || !hookState.phase) {
-    setLiveBadge('● Live Sync', 'live');
+    setLiveBadge(t('liveSync'), 'live');
     return;
   }
   const ageMs = Date.now() - (hookState.updatedAt || 0);
   if (ageMs > 60000 && hookState.phase !== 'stopped') {
-    setLiveBadge('● Live Sync', 'live');
+    setLiveBadge(t('liveSync'), 'live');
     return;
   }
   if (hookState.phase === 'thinking') {
-    setLiveBadge('💭 Thinking…', 'active');
+    setLiveBadge(t('thinkingPhase'), 'active');
   } else if (hookState.phase === 'running_tool') {
-    setLiveBadge(`⚙ ${hookState.toolName || 'Running tool'}…`, 'active');
+    setLiveBadge(t('runningToolPhase', { tool: hookState.toolName || 'tool' }), 'active');
   } else if (hookState.phase === 'tool_done') {
-    setLiveBadge(`✓ ${hookState.toolName || 'Tool done'}`, 'live');
+    setLiveBadge(t('toolDonePhase', { tool: hookState.toolName || 'tool' }), 'live');
   } else {
-    setLiveBadge('● Live Sync', 'live');
+    setLiveBadge(t('liveSync'), 'live');
   }
 }
 
@@ -691,10 +776,10 @@ function renderCustomPreview(doc) {
   baseBanner.className = 'session-ribbon';
   baseBanner.innerHTML = `
     <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">
-      <span style="font-weight:600;flex-shrink:0;">Base Dir:</span>
-      <input id="doc-basedir-input" class="input-sm" type="text" value="${escapeHtml(state.currentBaseDir)}" placeholder="Set root directory for relative links &amp; images (e.g. E:\\Projects\\HUAWEI_Precision)" style="flex:1;">
-      <button id="doc-basedir-apply" class="code-mini-btn" type="button">Apply</button>
-      ${(doc.filePath || state.currentBaseDir) ? `<button id="doc-basedir-reveal" class="code-mini-btn" type="button" title="打开文件所在目录">📂 目录</button>` : ''}
+      <span style="font-weight:600;flex-shrink:0;">${escapeHtml(t('baseDirLabel'))}</span>
+      <input id="doc-basedir-input" class="input-sm" type="text" value="${escapeHtml(state.currentBaseDir)}" placeholder="${escapeHtml(t('baseDirPlaceholder'))}" style="flex:1;">
+      <button id="doc-basedir-apply" class="code-mini-btn" type="button">${escapeHtml(t('applyBtn'))}</button>
+      ${(doc.filePath || state.currentBaseDir) ? `<button id="doc-basedir-reveal" class="code-mini-btn" type="button" title="${escapeHtml(t('openFolderTip'))}">${escapeHtml(t('openFolderBtn'))}</button>` : ''}
     </div>
   `;
   baseBanner.querySelector('#doc-basedir-reveal')?.addEventListener('click', () => {
@@ -733,7 +818,7 @@ function renderCustomPreview(doc) {
     const details = document.createElement('details');
     details.className = 'disclosure-card thinking-card';
     details.innerHTML = `<summary class="disclosure-trigger" style="list-style:none;">
-      <span class="thinking-label">Thought</span>
+      <span class="thinking-label">${escapeHtml(t('thoughtLabel'))}</span>
       <span class="thinking-preview">${escapeHtml(text.split(/\r?\n/)[0] || '')}</span>
     </summary><div class="thinking-body assistant-markdown" style="display:block;">${renderMarkdownHtml(text, { baseDir: state.currentBaseDir })}</div>`;
     slot.replaceWith(details);
@@ -858,8 +943,8 @@ function populatePreviewBody(bodyEl, info, codeViewId) {
   }
 
   bodyEl.innerHTML = `<div class="notice-banner" style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
-    <span>Binary file (${(info.size / 1024).toFixed(1)} KB): <code>${escapeHtml(info.path)}</code></span>
-    <button type="button" class="code-mini-btn" data-reveal-path="${escapeHtml(info.path)}">📂 打开文件所在目录</button>
+    <span>${escapeHtml(t('binaryFileNotice', { size: (info.size / 1024).toFixed(1) }))} <code>${escapeHtml(info.path)}</code></span>
+    <button type="button" class="code-mini-btn" data-reveal-path="${escapeHtml(info.path)}" title="${escapeHtml(t('openFolderTip'))}">${escapeHtml(t('openFolderBtn'))}</button>
   </div>`;
   bodyEl.querySelector('[data-reveal-path]')?.addEventListener('click', () => revealInFolder(info.path));
 }
@@ -883,9 +968,9 @@ async function openInPopupModal(rawHref, baseDir = '') {
   if (!modal || !body) return;
 
   modal.classList.remove('hidden');
-  el('popup-preview-title').textContent = rawHref.split(/[\\/]/).pop() || 'Loading…';
+  el('popup-preview-title').textContent = rawHref.split(/[\\/]/).pop() || t('loadingPreview');
   el('popup-preview-path').textContent = rawHref;
-  body.innerHTML = `<div style="color:var(--text-faint);font-size:0.82rem;">Loading preview…</div>`;
+  body.innerHTML = `<div style="color:var(--text-faint);font-size:0.82rem;">${escapeHtml(t('loadingPreview'))}</div>`;
 
   try {
     const info = await fetchFileInfo(rawHref, baseDir);
@@ -915,9 +1000,9 @@ async function openInSidePreview(rawHref, baseDir = '', { pushHistory = true } =
 
   pane.classList.remove('hidden');
   resizer?.classList.remove('hidden');
-  el('side-preview-title').textContent = rawHref.split(/[\\/]/).pop() || 'Loading…';
+  el('side-preview-title').textContent = rawHref.split(/[\\/]/).pop() || t('loadingPreview');
   el('side-preview-path').textContent = rawHref;
-  body.innerHTML = `<div style="color:var(--text-faint);font-size:0.82rem;">Loading preview…</div>`;
+  body.innerHTML = `<div style="color:var(--text-faint);font-size:0.82rem;">${escapeHtml(t('loadingPreview'))}</div>`;
 
   try {
     const info = await fetchFileInfo(rawHref, baseDir);
@@ -1026,19 +1111,19 @@ function renderToolsMenu() {
   const totalTok = (s.totalInputTokens || 0) + (s.totalCacheReadTokens || 0) + (s.totalOutputTokens || 0);
 
   const items = [
-    { id: 'btw', cmd: '/btw', desc: 'Side Questions', badge: btwCount > 0 ? String(btwCount) : '' },
-    { id: 'context', cmd: '/context', desc: 'Context Window', badge: ctxPct },
-    { id: 'usage', cmd: '/usage', desc: 'Model Quotas & Tokens', badge: totalTok > 0 ? formatCompactTokens(totalTok) : '' },
+    { id: 'btw', cmd: '/btw', desc: t('cmdBtwDesc'), badge: btwCount > 0 ? String(btwCount) : '' },
+    { id: 'context', cmd: '/context', desc: t('cmdContextDesc'), badge: ctxPct },
+    { id: 'usage', cmd: '/usage', desc: t('cmdUsageDesc'), badge: totalTok > 0 ? formatCompactTokens(totalTok) : '' },
   ];
 
   menu.innerHTML = `
-    <div class="theme-menu-section-label">Session Commands</div>
+    <div class="theme-menu-section-label">${escapeHtml(t('secSessionCmds'))}</div>
     ${items.map((it) => {
       const active = state.activeCliToolTab === it.id;
       return `<button type="button" class="theme-menu-item ${active ? 'active' : ''}" data-open-cli-tool="${it.id}">
         <span class="theme-menu-item-left">
           <code style="font-size:0.75rem;">${it.cmd}</code>
-          <span style="font-size:0.74rem;color:var(--text-muted);">${it.desc}</span>
+          <span style="font-size:0.74rem;color:var(--text-muted);">${escapeHtml(it.desc)}</span>
         </span>
         <span style="font-size:0.71rem;color:var(--text-faint);font-family:var(--font-mono);">${escapeHtml(it.badge)}</span>
       </button>`;
@@ -1205,7 +1290,7 @@ function jumpToFindHit(nextIdx) {
 
 async function manualSync() {
   const btn = el('sync-btn');
-  if (btn) btn.textContent = 'Syncing…';
+  if (btn) btn.textContent = t('syncingBtn');
   await loadConversations();
   await loadCustomPreviews();
   if (state.mode === 'sessions' && state.activeConvId) {
@@ -1213,7 +1298,7 @@ async function manualSync() {
   } else if (state.mode === 'docs' && state.activePreviewId) {
     await openCustomPreview(state.activePreviewId);
   }
-  if (btn) btn.textContent = '↻ Sync';
+  if (btn) btn.textContent = t('syncBtn');
 }
 
 async function submitCustomPreview({ id, title, content, mode, filePath, droppedFilename, baseDir }) {
@@ -1293,7 +1378,11 @@ async function commitDocRename(docId, newTitle) {
 }
 
 async function bootstrap() {
+  setLang(getLang());
+  applyStaticI18n();
   applyAppearance();
+  const initManageBtn = el('docs-manage-btn');
+  if (initManageBtn) initManageBtn.textContent = t('manageBtn');
 
   transcriptRenderer = new TranscriptRenderer(el('reader-column'), {
     theme: resolvedTheme(),
@@ -1387,8 +1476,8 @@ async function bootstrap() {
       openCustomPreview(validTarget);
     } else {
       syncUrlState({ mode: 'docs' });
-      el('doc-title').textContent = 'Docs / Clips';
-      el('reader-column').innerHTML = `<div class="empty-state"><strong>Docs / Clips</strong><span>Click <strong>📂 Browse…</strong>, <strong>+ Open / Paste</strong>, or drag any Markdown file into this window. Your list is automatically saved to disk.</span></div>`;
+      el('doc-title').textContent = t('tabDocs');
+      el('reader-column').innerHTML = `<div class="empty-state"><strong>${escapeHtml(t('docsEmptyTitle'))}</strong><span>${t('docsEmptyHint')}</span></div>`;
       renderToc([]);
     }
   });
@@ -1401,7 +1490,7 @@ async function bootstrap() {
     state.renamingDocId = null;
     const btn = el('docs-manage-btn');
     if (btn) {
-      btn.textContent = state.docsManageMode ? '✓ Done' : '⚙ Manage';
+      btn.textContent = state.docsManageMode ? t('manageDoneBtn') : t('manageBtn');
       btn.classList.toggle('active', state.docsManageMode);
     }
     renderSidebarList();
@@ -1529,7 +1618,8 @@ async function bootstrap() {
         if (state.customPreviews.length > 0) {
           openCustomPreview(state.customPreviews[0].id);
         } else {
-          el('reader-column').innerHTML = `<div class="empty-state"><strong>Document removed</strong><span>Select or open another Markdown document.</span></div>`;
+          state.currentCustomDoc = null;
+          el('reader-column').innerHTML = `<div class="empty-state"><strong>${escapeHtml(t('docRemovedTitle'))}</strong><span>${escapeHtml(t('docRemovedHint'))}</span></div>`;
         }
       }
       return;
@@ -1599,16 +1689,15 @@ async function bootstrap() {
     const view = el('popup-code-view');
     if (!view) return;
     const wrapped = view.classList.toggle('wrapped');
-    e.target.textContent = wrapped ? 'Unwrap' : 'Wrap';
+    e.target.textContent = wrapped ? t('unwrapBtn') : t('wrapBtn');
   });
   el('popup-copy-btn')?.addEventListener('click', async (e) => {
     const text = state.popupCurrent?.content || state.popupCurrent?.path || '';
     if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
-      const orig = e.target.textContent;
-      e.target.textContent = 'Copied';
-      setTimeout(() => { e.target.textContent = orig; }, 1300);
+      e.target.textContent = t('copiedBtn');
+      setTimeout(() => { e.target.textContent = t('copyBtn'); }, 1300);
     } catch {}
   });
 
@@ -1637,16 +1726,15 @@ async function bootstrap() {
     const view = el('side-code-view');
     if (!view) return;
     const wrapped = view.classList.toggle('wrapped');
-    e.target.textContent = wrapped ? 'Unwrap' : 'Wrap';
+    e.target.textContent = wrapped ? t('unwrapBtn') : t('wrapBtn');
   });
   el('side-copy-btn')?.addEventListener('click', async (e) => {
     const text = state.sideCurrent?.content || state.sideCurrent?.path || '';
     if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
-      const orig = e.target.textContent;
-      e.target.textContent = 'Copied';
-      setTimeout(() => { e.target.textContent = orig; }, 1300);
+      e.target.textContent = t('copiedBtn');
+      setTimeout(() => { e.target.textContent = t('copyBtn'); }, 1300);
     } catch {}
   });
   el('side-promote-btn')?.addEventListener('click', async () => {
@@ -1671,7 +1759,7 @@ async function bootstrap() {
   // Topbar Tools (/btw, /context, /usage) dropdown & drawer
   el('tools-btn')?.addEventListener('click', (e) => {
     e.stopPropagation();
-    el('theme-menu')?.classList.add('hidden');
+    el('prefs-menu')?.classList.add('hidden');
     renderToolsMenu();
     el('tools-menu')?.classList.toggle('hidden');
   });
@@ -1754,14 +1842,42 @@ async function bootstrap() {
     }
   });
 
-  el('theme-btn')?.addEventListener('click', (e) => {
+  // Unified Persistent Preferences Dropdown (placed left of Sync)
+  el('prefs-btn')?.addEventListener('click', (e) => {
     e.stopPropagation();
     el('tools-menu')?.classList.add('hidden');
-    el('theme-menu')?.classList.toggle('hidden');
+    renderPrefsMenu();
+    el('prefs-menu')?.classList.toggle('hidden');
   });
 
-  el('theme-menu')?.addEventListener('click', (e) => {
+  el('prefs-menu')?.addEventListener('click', (e) => {
     e.stopPropagation();
+    const langBtn = e.target.closest('[data-pref-lang]');
+    if (langBtn) {
+      applyLanguage(langBtn.dataset.prefLang);
+      return;
+    }
+    const proseBtn = e.target.closest('[data-pref-prose]');
+    if (proseBtn) {
+      state.prose = proseBtn.dataset.prefProse === 'serif' ? 'serif' : 'sans';
+      localStorage.setItem('amp-prose', state.prose);
+      applyAppearance();
+      return;
+    }
+    const widthBtn = e.target.closest('[data-pref-width]');
+    if (widthBtn) {
+      state.width = widthBtn.dataset.prefWidth === 'wide' ? 'wide' : 'normal';
+      localStorage.setItem('amp-width', state.width);
+      applyAppearance();
+      return;
+    }
+    const tablesBtn = e.target.closest('[data-pref-tables]');
+    if (tablesBtn) {
+      state.tables = tablesBtn.dataset.prefTables === 'expand' ? 'expand' : 'compact';
+      localStorage.setItem('amp-tables', state.tables);
+      applyAppearance();
+      return;
+    }
     const modeBtn = e.target.closest('[data-theme-mode]');
     if (modeBtn) {
       state.theme = modeBtn.dataset.themeMode === 'dark' ? 'dark' : 'light';
@@ -1779,27 +1895,9 @@ async function bootstrap() {
 
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.theme-dropdown-wrap')) {
-      el('theme-menu')?.classList.add('hidden');
+      el('prefs-menu')?.classList.add('hidden');
       el('tools-menu')?.classList.add('hidden');
     }
-  });
-
-  el('tables-btn')?.addEventListener('click', () => {
-    state.tables = state.tables === 'expand' ? 'compact' : 'expand';
-    localStorage.setItem('amp-tables', state.tables);
-    applyAppearance();
-  });
-
-  el('width-btn')?.addEventListener('click', () => {
-    state.width = state.width === 'normal' ? 'wide' : 'normal';
-    localStorage.setItem('amp-width', state.width);
-    applyAppearance();
-  });
-
-  el('prose-btn')?.addEventListener('click', () => {
-    state.prose = state.prose === 'sans' ? 'serif' : 'sans';
-    localStorage.setItem('amp-prose', state.prose);
-    applyAppearance();
   });
 
   // Find bar
@@ -1905,8 +2003,8 @@ async function bootstrap() {
       return;
     }
     if (e.key === 'Escape') {
-      if (!el('theme-menu')?.classList.contains('hidden') || !el('tools-menu')?.classList.contains('hidden')) {
-        el('theme-menu')?.classList.add('hidden');
+      if (!el('prefs-menu')?.classList.contains('hidden') || !el('tools-menu')?.classList.contains('hidden')) {
+        el('prefs-menu')?.classList.add('hidden');
         el('tools-menu')?.classList.add('hidden');
         return;
       }
@@ -1952,8 +2050,18 @@ async function bootstrap() {
       applyAppearance();
     }
     else if (k === 'o') { e.preventDefault(); el('toc-toggle-btn')?.click(); }
-    else if (k === 'w') { e.preventDefault(); el('width-btn')?.click(); }
-    else if (k === 'f') { e.preventDefault(); el('prose-btn')?.click(); }
+    else if (k === 'w') {
+      e.preventDefault();
+      state.width = state.width === 'normal' ? 'wide' : 'normal';
+      localStorage.setItem('amp-width', state.width);
+      applyAppearance();
+    }
+    else if (k === 'f') {
+      e.preventDefault();
+      state.prose = state.prose === 'sans' ? 'serif' : 'sans';
+      localStorage.setItem('amp-prose', state.prose);
+      applyAppearance();
+    }
     else if (k === 'p') { e.preventDefault(); el('paste-open-btn')?.click(); }
     else if (k === '/') {
       e.preventDefault();

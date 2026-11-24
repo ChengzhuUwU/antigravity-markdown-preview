@@ -2,6 +2,13 @@
 
 All notable changes to **Antigravity Markdown Preview (`agy-markdown-preview`)** will be documented in this file.
 
+## [0.2.0] - 2026-11-24
+
+### Added
+- **Mermaid v12 + ELK Orthogonal Pastel Engine**: Upgraded offline Mermaid bundle to `v12.3.0` with built-in **ELK (`Eclipse Layout Kernel`)** orthogonal port routing, quadratic-rounded 90° connector elbows, automatic multi-stage pastel pill nodes (`rx=10px`, Light & Dark adaptive), and automatic fallback for specialized diagram types.
+- **Interactive Mermaid Viewport & Fullscreen Lightbox**: Added inline & fullscreen (`⛶ 大屏预览`) pan-and-zoom canvas (mouse wheel zoom around cursor, drag-to-pan, `100%` / `⊡ 适应窗口` quick fit, and one-click vector `.svg` download).
+- **Topbar `Tools` Menu & Quick Jump**: Consolidated `/btw`, `/context`, and `/usage` into a topbar `Tools ▾` dropdown with a top-pinned drawer, added `⤒` / `⤓` jump-to-top/bottom buttons, and added automatic Hook capture for CLI `/btw` answers.
+
 ## [0.1.0] - 2026-11-24
 
 ### Added

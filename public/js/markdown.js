@@ -323,12 +323,19 @@ function createMarkedForBase(baseDir = '') {
         const id = `mermaid-${++mermaidCounter}`;
         return `<div class="mermaid-card" data-mermaid-id="${id}" data-mermaid-src="${escapeHtml(code)}">
           <div class="code-card-header">
-            <span>mermaid</span>
+            <span>mermaid · ELK</span>
             <div class="code-card-actions">
+              <button type="button" class="code-mini-btn" data-action="mmd-zoom-out" title="缩小 (Ctrl + 滚轮)">−</button>
+              <button type="button" class="code-mini-btn" data-action="mmd-zoom-reset" data-zoom-label title="重置缩放与位置">100%</button>
+              <button type="button" class="code-mini-btn" data-action="mmd-zoom-in" title="放大 (Ctrl + 滚轮)">+</button>
+              <button type="button" class="code-mini-btn" data-action="mmd-fullscreen" title="大屏交互预览 (双击画布亦可打开)">⛶ 大屏预览</button>
+              <button type="button" class="code-mini-btn" data-action="mmd-download-svg" title="下载矢量 SVG">⬇ SVG</button>
               <button type="button" class="code-mini-btn" data-action="copy-raw">Copy</button>
             </div>
           </div>
-          <div class="mermaid-stage"><span style="color:var(--text-faint);font-size:0.8rem;">Rendering diagram…</span></div>
+          <div class="mermaid-stage" title="按住左键拖拽平移 · Ctrl+滚轮缩放 · 双击大屏预览">
+            <div class="mermaid-panzoom-canvas"><span style="color:var(--text-faint);font-size:0.8rem;">Rendering diagram…</span></div>
+          </div>
         </div>`;
       }
 
@@ -486,6 +493,341 @@ export function renderMarkdownHtml(markdown, { baseDir = '' } = {}) {
   return htmlParts.join('');
 }
 
+const GPT_PASTEL_LIGHT = [
+  { fill: '#dcebff', stroke: '#5b9bf8' }, // Sky Blue
+  { fill: '#f2e7ff', stroke: '#a86ef5' }, // Soft Violet
+  { fill: '#dcfce7', stroke: '#34c77b' }, // Mint Emerald
+  { fill: '#fef3c7', stroke: '#e59924' }, // Warm Amber
+  { fill: '#ffe4ec', stroke: '#e8648c' }, // Soft Rose
+];
+
+const GPT_PASTEL_DARK = [
+  { fill: '#192b48', stroke: '#60a5fa' }, // Deep Sky Blue
+  { fill: '#2a1d42', stroke: '#c084fc' }, // Deep Violet
+  { fill: '#153226', stroke: '#4ade80' }, // Deep Mint Emerald
+  { fill: '#362813', stroke: '#fbbf24' }, // Deep Amber
+  { fill: '#381b26', stroke: '#f472b6' }, // Deep Rose
+];
+
+function roundOrthogonalSvgPath(d, radius = 6.5) {
+  if (!d || /[CcQqSsTtAaZz]/.test(d)) return d;
+  const tokens = [...d.matchAll(/([ML])\s*(-?\d+(?:\.\d+)?)[,\s]+(-?\d+(?:\.\d+)?)/gi)];
+  if (tokens.length < 3) return d;
+
+  // Only round single continuous M ... L ... polylines
+  if (tokens.some((t, idx) => idx > 0 && t[1].toUpperCase() === 'M')) return d;
+
+  const rawPts = tokens.map((t) => ({ x: Number(t[2]), y: Number(t[3]) }));
+  const pts = [rawPts[0]];
+  for (let i = 1; i < rawPts.length; i++) {
+    const prev = pts[pts.length - 1];
+    if (Math.hypot(rawPts[i].x - prev.x, rawPts[i].y - prev.y) > 0.5) {
+      pts.push(rawPts[i]);
+    }
+  }
+  if (pts.length < 3) return d;
+
+  const out = [`M ${pts[0].x.toFixed(2)},${pts[0].y.toFixed(2)}`];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const dx1 = p1.x - p0.x;
+    const dy1 = p1.y - p0.y;
+    const dx2 = p2.x - p1.x;
+    const dy2 = p2.y - p1.y;
+    const len1 = Math.hypot(dx1, dy1);
+    const len2 = Math.hypot(dx2, dy2);
+    const cross = Math.abs(dx1 * dy2 - dy1 * dx2);
+    if (len1 < 2 || len2 < 2 || cross < 1e-2) {
+      out.push(`L ${p1.x.toFixed(2)},${p1.y.toFixed(2)}`);
+      continue;
+    }
+    const r = Math.min(radius, len1 * 0.45, len2 * 0.45);
+    const sx = p1.x - (dx1 / len1) * r;
+    const sy = p1.y - (dy1 / len1) * r;
+    const ex = p1.x + (dx2 / len2) * r;
+    const ey = p1.y + (dy2 / len2) * r;
+    out.push(`L ${sx.toFixed(2)},${sy.toFixed(2)} Q ${p1.x.toFixed(2)},${p1.y.toFixed(2)} ${ex.toFixed(2)},${ey.toFixed(2)}`);
+  }
+  const last = pts[pts.length - 1];
+  out.push(`L ${last.x.toFixed(2)},${last.y.toFixed(2)}`);
+  return out.join(' ');
+}
+
+function parseTranslateXY(transformAttr) {
+  if (!transformAttr) return null;
+  const m = transformAttr.match(/translate\(\s*(-?\d+(?:\.\d+)?)(?:[,\s]+(-?\d+(?:\.\d+)?))?\s*\)/i);
+  if (!m) return null;
+  return { x: Number(m[1]), y: Number(m[2] || 0) };
+}
+
+function polishMermaidSvgToGptStyle(svgEl, isDark) {
+  if (!svgEl) return;
+  const palette = isDark ? GPT_PASTEL_DARK : GPT_PASTEL_LIGHT;
+  const lineStroke = isDark ? '#787e8c' : '#969ba6';
+  const textColor = isDark ? '#f1f5f9' : '#1e293b';
+  const clusterFill = isDark ? '#1b1d22' : '#f3f4f6';
+  const clusterStroke = isDark ? '#2e323b' : '#e5e7eb';
+
+  // 1. Subgraph / Cluster containers -> soft light-gray / dark-slate GPT cards
+  const clusterBoxes = [];
+  svgEl.querySelectorAll('g.cluster').forEach((cl) => {
+    const rect = cl.querySelector('rect');
+    if (rect) {
+      const inlineStyle = rect.getAttribute('style') || '';
+      const hasCustomFill = /fill\s*:\s*(?!none|#fff4dd|#ffffde|hsl\()/i.test(inlineStyle);
+      const x = Number(rect.getAttribute('x') || 0);
+      const y = Number(rect.getAttribute('y') || 0);
+      const w = Number(rect.getAttribute('width') || 0);
+      const h = Number(rect.getAttribute('height') || 0);
+      clusterBoxes.push({ x, y, w, h, area: w * h });
+      if (!hasCustomFill) {
+        rect.style.fill = clusterFill;
+        rect.style.stroke = clusterStroke;
+        rect.style.strokeWidth = '1px';
+      }
+      rect.setAttribute('rx', '5');
+      rect.setAttribute('ry', '5');
+    }
+    cl.querySelectorAll('.cluster-label span, .cluster-label text, .cluster-label p').forEach((lbl) => {
+      lbl.style.color = textColor;
+      lbl.style.fill = textColor;
+      lbl.style.fontWeight = '600';
+      lbl.style.fontSize = '13.5px';
+    });
+  });
+
+  // Sort clusters top-to-bottom so stages get deterministic pastel hues
+  clusterBoxes.sort((a, b) => a.y - b.y || a.x - b.x);
+
+  // Collect node Y range for unclustered topological coloring
+  const nodeInfos = [];
+  svgEl.querySelectorAll('g.node').forEach((nodeEl) => {
+    const pos = parseTranslateXY(nodeEl.getAttribute('transform')) || { x: 0, y: 0 };
+    nodeInfos.push({ nodeEl, x: pos.x, y: pos.y });
+  });
+  const minY = nodeInfos.length ? Math.min(...nodeInfos.map((n) => n.y)) : 0;
+  const maxY = nodeInfos.length ? Math.max(...nodeInfos.map((n) => n.y)) : 1;
+  const spanY = Math.max(1, maxY - minY);
+
+  // 2. Pastel rounded pill styling on flowchart/state nodes
+  for (const { nodeEl, x, y } of nodeInfos) {
+    // Pick smallest containing cluster if nested
+    let matchedClusterIdx = -1;
+    let smallestArea = Infinity;
+    clusterBoxes.forEach((cb, idx) => {
+      if (x >= cb.x && x <= cb.x + cb.w && y >= cb.y && y <= cb.y + cb.h && cb.area < smallestArea) {
+        smallestArea = cb.area;
+        matchedClusterIdx = idx;
+      }
+    });
+
+    let palIdx = 0;
+    if (matchedClusterIdx >= 0) {
+      // Map stage 0 -> blue, stage 1 & 2 -> violet, stage 3 -> emerald, etc. (matching ChatGPT multi-stage palette)
+      const stageMap = [0, 1, 1, 2, 3, 4];
+      palIdx = stageMap[matchedClusterIdx % stageMap.length];
+    } else if (clusterBoxes.length > 0) {
+      palIdx = y <= clusterBoxes[0].y ? 0 : 2;
+    } else {
+      const ratio = (y - minY) / spanY;
+      palIdx = ratio < 0.22 ? 0 : (ratio > 0.78 ? 2 : 1);
+    }
+
+    const chosen = palette[palIdx % palette.length];
+    const shape = nodeEl.querySelector('rect.label-container, rect.basic, polygon.label-container, path.label-container, rect');
+    if (shape) {
+      const inlineStyle = shape.getAttribute('style') || '';
+      const hasUserCustomFill = /fill\s*:\s*(?!none|#fff4dd|#eaeaea|#ececff|#f9f9f9|hsl\(40)/i.test(inlineStyle);
+      if (!hasUserCustomFill) {
+        shape.style.fill = chosen.fill;
+        shape.style.stroke = chosen.stroke;
+        shape.style.strokeWidth = '1.25px';
+      }
+      if (shape.tagName.toLowerCase() === 'rect') {
+        const curRx = Number(shape.getAttribute('rx') || 0);
+        if (curRx < 10) {
+          shape.setAttribute('rx', '10');
+          shape.setAttribute('ry', '10');
+        }
+      }
+    }
+
+    nodeEl.querySelectorAll('.nodeLabel, text, span, p').forEach((t) => {
+      if (!t.style.color) t.style.color = textColor;
+      if (t.tagName.toLowerCase() === 'text') t.style.fill = textColor;
+      t.style.fontWeight = '500';
+      t.style.fontSize = '13px';
+    });
+  }
+
+  // 3. Round 90-degree orthogonal ELK connector elbows & refine strokes
+  svgEl.querySelectorAll('path.flowchart-link, path.transition, g.edgePaths path').forEach((p) => {
+    const rawD = p.getAttribute('d') || '';
+    if (rawD) {
+      p.setAttribute('d', roundOrthogonalSvgPath(rawD, 6.5));
+    }
+    if (p.classList.contains('edge-pattern-solid')) {
+      p.style.strokeDasharray = 'none';
+      p.style.strokeDashoffset = '0';
+    }
+    const inlineStyle = p.getAttribute('style') || '';
+    if (!/stroke\s*:\s*#(?!333|000|0b0b0b)/i.test(inlineStyle)) {
+      p.style.stroke = lineStroke;
+    }
+    p.style.strokeWidth = '1.15px';
+    p.style.strokeLinecap = 'round';
+    p.style.strokeLinejoin = 'round';
+  });
+
+  // 4. Lightweight refined arrowheads matching connector tone
+  svgEl.querySelectorAll('marker path, marker polygon, .marker').forEach((mk) => {
+    mk.style.fill = lineStroke;
+    mk.style.stroke = lineStroke;
+  });
+
+  // 5. Edge labels pill background
+  svgEl.querySelectorAll('.edgeLabel rect, .labelBkg').forEach((bg) => {
+    bg.style.fill = isDark ? '#18191e' : '#ffffff';
+    bg.style.opacity = '0.92';
+  });
+}
+
+export function bindPanZoomViewport(viewportEl, canvasEl, { wheelRequiresModifier = false, onScaleChange } = {}) {
+  if (!viewportEl || !canvasEl) return null;
+  if (viewportEl._panZoomCtrl) return viewportEl._panZoomCtrl;
+
+  const state = { scale: 1, tx: 0, ty: 0, dragging: false, startX: 0, startY: 0 };
+
+  const apply = () => {
+    canvasEl.style.transform = `translate(${state.tx.toFixed(1)}px, ${state.ty.toFixed(1)}px) scale(${state.scale.toFixed(3)})`;
+    onScaleChange?.(state.scale);
+  };
+
+  const zoomBy = (factor, originClientX = null, originClientY = null) => {
+    const prevScale = state.scale;
+    const nextScale = Math.min(6, Math.max(0.2, prevScale * factor));
+    if (Math.abs(nextScale - prevScale) < 1e-4) return;
+    if (originClientX != null && originClientY != null) {
+      const rect = viewportEl.getBoundingClientRect();
+      const cx = originClientX - (rect.left + rect.width / 2);
+      const cy = originClientY - (rect.top + rect.height / 2);
+      const ratio = nextScale / prevScale;
+      state.tx = cx - (cx - state.tx) * ratio;
+      state.ty = cy - (cy - state.ty) * ratio;
+    }
+    state.scale = nextScale;
+    apply();
+  };
+
+  const reset = () => {
+    state.scale = 1;
+    state.tx = 0;
+    state.ty = 0;
+    apply();
+  };
+
+  viewportEl.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    state.dragging = true;
+    state.startX = e.clientX - state.tx;
+    state.startY = e.clientY - state.ty;
+    viewportEl.classList.add('panning');
+    e.preventDefault();
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!state.dragging) return;
+    state.tx = e.clientX - state.startX;
+    state.ty = e.clientY - state.startY;
+    apply();
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (!state.dragging) return;
+    state.dragging = false;
+    viewportEl.classList.remove('panning');
+  });
+
+  viewportEl.addEventListener('wheel', (e) => {
+    if (wheelRequiresModifier && !(e.ctrlKey || e.metaKey || e.altKey)) return;
+    e.preventDefault();
+    const factor = e.deltaY < 0 ? 1.14 : 1 / 1.14;
+    zoomBy(factor, e.clientX, e.clientY);
+  }, { passive: false });
+
+  const setTransform = (nextScale, nextTx = 0, nextTy = 0) => {
+    state.scale = Math.min(6, Math.max(0.2, nextScale));
+    state.tx = nextTx;
+    state.ty = nextTy;
+    apply();
+  };
+
+  const ctrl = { zoomBy, reset, setTransform, getScale: () => state.scale };
+  viewportEl._panZoomCtrl = ctrl;
+  return ctrl;
+}
+
+function configureMermaidInstance(theme, useElk = true) {
+  const isDark = theme === 'dark';
+  window.mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'strict',
+    layout: useElk ? 'elk' : 'dagre',
+    look: 'classic',
+    elk: {
+      mergeEdges: false,
+      nodePlacementStrategy: 'BRANDES_KOEPF',
+      cycleBreakingStrategy: 'GREEDY',
+    },
+    flowchart: {
+      htmlLabels: true,
+      curve: 'linear',
+      wrappingWidth: 260,
+      padding: 11,
+      nodeSpacing: 28,
+      rankSpacing: 38,
+      subGraphTitleMargin: { top: 10, bottom: 8 },
+    },
+    theme: 'base',
+    fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+    themeVariables: isDark
+      ? {
+          darkMode: true,
+          background: 'transparent',
+          primaryColor: '#192b48',
+          primaryTextColor: '#f1f5f9',
+          primaryBorderColor: '#60a5fa',
+          lineColor: '#787e8c',
+          secondaryColor: '#2a1d42',
+          tertiaryColor: '#1b1d22',
+          mainBkg: '#192b48',
+          nodeBorder: '#60a5fa',
+          clusterBkg: '#1b1d22',
+          clusterBorder: '#2e323b',
+          titleColor: '#f1f5f9',
+          edgeLabelBackground: '#18191e',
+        }
+      : {
+          darkMode: false,
+          background: 'transparent',
+          primaryColor: '#dcebff',
+          primaryTextColor: '#1e293b',
+          primaryBorderColor: '#5b9bf8',
+          lineColor: '#969ba6',
+          secondaryColor: '#f2e7ff',
+          tertiaryColor: '#f3f4f6',
+          mainBkg: '#dcebff',
+          nodeBorder: '#5b9bf8',
+          clusterBkg: '#f3f4f6',
+          clusterBorder: '#e5e7eb',
+          titleColor: '#1e293b',
+          edgeLabelBackground: '#ffffff',
+        },
+  });
+}
+
 async function ensureMermaid(theme) {
   if (!window.mermaid) {
     if (!mermaidLoaderPromise) {
@@ -499,12 +841,60 @@ async function ensureMermaid(theme) {
     }
     await mermaidLoaderPromise;
   }
-  window.mermaid.initialize({
-    startOnLoad: false,
-    securityLevel: 'strict',
-    theme: theme === 'dark' ? 'dark' : 'neutral',
-  });
+  configureMermaidInstance(theme, true);
   return window.mermaid;
+}
+
+async function renderSingleMermaidCard(card, theme) {
+  const src = card.dataset.mermaidSrc || '';
+  const stage = card.querySelector('.mermaid-stage');
+  let canvas = stage?.querySelector('.mermaid-panzoom-canvas');
+  if (!stage || !src) return;
+  if (!canvas) {
+    canvas = document.createElement('div');
+    canvas.className = 'mermaid-panzoom-canvas';
+    stage.innerHTML = '';
+    stage.appendChild(canvas);
+  }
+
+  const mermaid = await ensureMermaid(theme);
+  try {
+    let rendered;
+    try {
+      configureMermaidInstance(theme, true);
+      rendered = await mermaid.render(`mmd_${++mermaidCounter}`, src);
+    } catch {
+      // Seamless fallback to standard layout for specialized diagrams (e.g. gantt / timeline)
+      configureMermaidInstance(theme, false);
+      rendered = await mermaid.render(`mmd_${++mermaidCounter}`, src);
+    }
+    canvas.innerHTML = rendered.svg;
+    const svgEl = canvas.querySelector('svg');
+    polishMermaidSvgToGptStyle(svgEl, theme === 'dark');
+    card.dataset.mermaidRendered = 'true';
+    card.dataset.mermaidTheme = theme;
+
+    const zoomLabel = card.querySelector('[data-zoom-label]');
+    bindPanZoomViewport(stage, canvas, {
+      wheelRequiresModifier: true,
+      onScaleChange: (s) => {
+        if (zoomLabel) zoomLabel.textContent = `${Math.round(s * 100)}%`;
+      },
+    });
+  } catch (err) {
+    canvas.innerHTML = `<pre class="tool-pre">${escapeHtml(src)}\n\n[Mermaid error: ${escapeHtml(err.message || String(err))}]</pre>`;
+    card.dataset.mermaidRendered = 'true';
+    card.dataset.mermaidTheme = theme;
+  }
+}
+
+export function rethemeMermaidDiagrams(theme = 'light') {
+  const cards = document.querySelectorAll('.mermaid-card[data-mermaid-rendered="true"]');
+  cards.forEach((card) => {
+    if (card.dataset.mermaidTheme !== theme) {
+      renderSingleMermaidCard(card, theme).catch(() => {});
+    }
+  });
 }
 
 export function enhanceMarkdownDom(container, theme = 'light') {
@@ -521,31 +911,31 @@ export function enhanceMarkdownDom(container, theme = 'light') {
     });
   }
 
-  const mermaidCards = container.querySelectorAll('.mermaid-card:not([data-mermaid-rendered="true"])');
+  const mermaidCards = container.querySelectorAll('.mermaid-card');
   if (mermaidCards.length > 0) {
-    ensureMermaid(theme)
-      .then(async (mermaid) => {
-        for (const card of mermaidCards) {
-          if (card.dataset.mermaidRendered === 'true') continue;
-          const src = card.dataset.mermaidSrc || '';
-          const stage = card.querySelector('.mermaid-stage');
-          if (!stage || !src) continue;
-          try {
-            const renderId = `mmd_${++mermaidCounter}`;
-            const { svg } = await mermaid.render(renderId, src);
-            stage.innerHTML = svg;
-            card.dataset.mermaidRendered = 'true';
-          } catch (err) {
-            stage.innerHTML = `<pre class="tool-pre">${escapeHtml(src)}\n\n[Mermaid error: ${escapeHtml(err.message || String(err))}]</pre>`;
-            card.dataset.mermaidRendered = 'true';
-          }
-        }
-      })
-      .catch(() => {});
+    (async () => {
+      for (const card of mermaidCards) {
+        if (card.dataset.mermaidRendered === 'true' && card.dataset.mermaidTheme === theme) continue;
+        await renderSingleMermaidCard(card, theme);
+      }
+    })().catch(() => {});
   }
 }
 
-export function attachCodeCardInteractions(root, { onOpenLocalLink, onOpenConversation, onZoomImage } = {}) {
+export function downloadSvgElement(svgEl, filename = 'mermaid-diagram.svg') {
+  if (!svgEl) return;
+  const clone = svgEl.cloneNode(true);
+  if (!clone.getAttribute('xmlns')) clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>\n${clone.outerHTML}`;
+  const blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+export function attachCodeCardInteractions(root, { onOpenLocalLink, onOpenConversation, onZoomImage, onFullscreenMermaid } = {}) {
   if (!root || root.dataset.mdInteractionsBound === 'true') return;
   root.dataset.mdInteractionsBound = 'true';
 
@@ -586,7 +976,12 @@ export function attachCodeCardInteractions(root, { onOpenLocalLink, onOpenConver
   };
 
   root.addEventListener('dblclick', (e) => {
-    handleLocalTrigger(e);
+    if (handleLocalTrigger(e)) return;
+    const mmdStage = e.target.closest('.mermaid-stage');
+    if (mmdStage && onFullscreenMermaid) {
+      const svg = mmdStage.querySelector('svg');
+      if (svg) onFullscreenMermaid(svg);
+    }
   });
 
   root.addEventListener('click', async (e) => {
@@ -622,6 +1017,27 @@ export function attachCodeCardInteractions(root, { onOpenLocalLink, onOpenConver
 
     const card = btn.closest('.code-card, .mermaid-card');
     if (!card) return;
+
+    if (action === 'mmd-zoom-in' || action === 'mmd-zoom-out' || action === 'mmd-zoom-reset') {
+      const stage = card.querySelector('.mermaid-stage');
+      const ctrl = stage?._panZoomCtrl;
+      if (!ctrl) return;
+      if (action === 'mmd-zoom-reset') ctrl.reset();
+      else ctrl.zoomBy(action === 'mmd-zoom-in' ? 1.25 : 0.8);
+      return;
+    }
+
+    if (action === 'mmd-fullscreen') {
+      const svg = card.querySelector('.mermaid-stage svg');
+      if (svg && onFullscreenMermaid) onFullscreenMermaid(svg);
+      return;
+    }
+
+    if (action === 'mmd-download-svg') {
+      const svg = card.querySelector('.mermaid-stage svg');
+      if (svg) downloadSvgElement(svg, `${card.dataset.mermaidId || 'mermaid'}.svg`);
+      return;
+    }
 
     if (action === 'toggle-wrap') {
       const wrapped = card.classList.toggle('wrapped');

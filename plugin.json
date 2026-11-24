@@ -1,7 +1,7 @@
 {
   "name": "agy-markdown-preview",
   "displayName": "Markdown Preview",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Lightweight editorial Markdown & Session previewer for Antigravity CLI & Desktop with 2x8 customizable color themes, collapsed thinking/tools, live SSE sync, KaTeX, Mermaid, and GitHub callouts.",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [

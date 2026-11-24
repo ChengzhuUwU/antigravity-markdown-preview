@@ -1,4 +1,13 @@
-import { escapeHtml, slugifyHeading, renderMarkdownHtml, enhanceMarkdownDom, attachCodeCardInteractions } from './markdown.js';
+import {
+  escapeHtml,
+  slugifyHeading,
+  renderMarkdownHtml,
+  enhanceMarkdownDom,
+  attachCodeCardInteractions,
+  bindPanZoomViewport,
+  downloadSvgElement,
+  rethemeMermaidDiagrams,
+} from './markdown.js';
 import { TranscriptRenderer, formatCompactTokens, renderCliInsightsHtml } from './transcript-view.js';
 
 const isSidecar = Boolean(window.sidecar && typeof window.sidecar.fetch === 'function');
@@ -135,6 +144,7 @@ function applyAppearance() {
   }
   renderThemeMenu();
   transcriptRenderer?.setTheme(effectiveTheme);
+  rethemeMermaidDiagrams(effectiveTheme);
 }
 
 let transcriptRenderer = null;
@@ -949,6 +959,60 @@ function openZoomImage(src, alt) {
   modal.classList.remove('hidden');
 }
 
+function fitMermaidModalToScreen() {
+  const viewport = el('mermaid-modal-viewport');
+  const svg = el('mermaid-modal-canvas')?.querySelector('svg');
+  const ctrl = viewport?._panZoomCtrl;
+  if (!viewport || !svg || !ctrl) return;
+  const vRect = viewport.getBoundingClientRect();
+  const vb = (svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+  const natW = vb.length === 4 && vb[2] > 0 ? vb[2] : (svg.clientWidth || 600);
+  const natH = vb.length === 4 && vb[3] > 0 ? vb[3] : (svg.clientHeight || 600);
+  const fitScale = Math.min(1.5, (vRect.width - 56) / natW, (vRect.height - 56) / natH);
+  ctrl.setTransform(fitScale, 0, 0);
+}
+
+function openFullscreenMermaid(svgEl) {
+  const modal = el('mermaid-modal');
+  const viewport = el('mermaid-modal-viewport');
+  const canvas = el('mermaid-modal-canvas');
+  const resetBtn = el('mmd-modal-zoom-reset');
+  if (!modal || !viewport || !canvas || !svgEl) return;
+
+  const cloned = svgEl.cloneNode(true);
+  cloned.style.maxWidth = 'none';
+  cloned.style.maxHeight = 'none';
+  const vb = cloned.getAttribute('viewBox');
+  let natW = 700;
+  let natH = 500;
+  if (vb) {
+    const parts = vb.trim().split(/[\s,]+/).map(Number);
+    if (parts.length === 4 && parts[2] > 0) {
+      natW = parts[2];
+      natH = parts[3];
+      cloned.style.width = `${natW}px`;
+      cloned.style.height = `${natH}px`;
+    }
+  }
+  canvas.innerHTML = '';
+  canvas.appendChild(cloned);
+  modal.classList.remove('hidden');
+
+  const ctrl = bindPanZoomViewport(viewport, canvas, {
+    wheelRequiresModifier: false,
+    onScaleChange: (s) => {
+      if (resetBtn) resetBtn.textContent = `${Math.round(s * 100)}%`;
+    },
+  });
+
+  requestAnimationFrame(() => {
+    const vRect = viewport.getBoundingClientRect();
+    // Start fitted cleanly inside the big screen if oversized, or 100% if already comfortable
+    const fitScale = Math.min(1.15, (vRect.width - 64) / natW, (vRect.height - 64) / natH);
+    ctrl?.setTransform(fitScale, 0, 0);
+  });
+}
+
 function renderToolsMenu() {
   const menu = el('tools-menu');
   const toolsBtn = el('tools-btn');
@@ -1285,6 +1349,7 @@ async function bootstrap() {
       }
     },
     onZoomImage: openZoomImage,
+    onFullscreenMermaid: openFullscreenMermaid,
   };
   attachCodeCardInteractions(el('reader-column'), mdCallbacks);
   attachCodeCardInteractions(el('side-preview-body'), mdCallbacks);
@@ -1781,6 +1846,20 @@ async function bootstrap() {
 
   el('image-modal')?.addEventListener('click', () => el('image-modal')?.classList.add('hidden'));
 
+  // Fullscreen Mermaid Modal controls
+  el('mmd-modal-close')?.addEventListener('click', () => el('mermaid-modal')?.classList.add('hidden'));
+  el('mermaid-modal')?.addEventListener('click', (e) => {
+    if (e.target === el('mermaid-modal')) el('mermaid-modal')?.classList.add('hidden');
+  });
+  el('mmd-modal-zoom-in')?.addEventListener('click', () => el('mermaid-modal-viewport')?._panZoomCtrl?.zoomBy(1.25));
+  el('mmd-modal-zoom-out')?.addEventListener('click', () => el('mermaid-modal-viewport')?._panZoomCtrl?.zoomBy(0.8));
+  el('mmd-modal-zoom-reset')?.addEventListener('click', () => el('mermaid-modal-viewport')?._panZoomCtrl?.reset());
+  el('mmd-modal-zoom-fit')?.addEventListener('click', fitMermaidModalToScreen);
+  el('mmd-modal-download')?.addEventListener('click', () => {
+    const svg = el('mermaid-modal-canvas')?.querySelector('svg');
+    if (svg) downloadSvgElement(svg, 'mermaid-elk-diagram.svg');
+  });
+
   // External OS File Drag-and-Drop onto window (resolves true source path on disk, NEVER inherits stale baseDir!)
   document.addEventListener('dragover', (e) => {
     if (state.dragDocId) return; // Internal reorder handled by sessionListEl
@@ -1834,6 +1913,10 @@ async function bootstrap() {
       if (state.activeCliToolTab) {
         state.activeCliToolTab = null;
         renderCliToolsDrawer();
+        return;
+      }
+      if (!el('mermaid-modal')?.classList.contains('hidden')) {
+        el('mermaid-modal')?.classList.add('hidden');
         return;
       }
       if (!el('image-modal')?.classList.contains('hidden')) {

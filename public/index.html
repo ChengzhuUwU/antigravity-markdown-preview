@@ -212,6 +212,29 @@
     </div>
   </div>
 
+  <!-- Fullscreen Mermaid Interactive Canvas Modal -->
+  <div id="mermaid-modal" class="modal-backdrop hidden">
+    <div class="modal-panel mermaid-fullscreen-panel">
+      <div class="modal-header">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <strong style="font-size:0.86rem;">Mermaid Diagram · ELK Orthogonal View</strong>
+          <span style="font-size:0.73rem;color:var(--text-faint);">滚轮自由缩放 · 按住左键拖拽平移</span>
+        </div>
+        <div class="side-preview-actions">
+          <button id="mmd-modal-zoom-out" class="code-mini-btn" type="button" title="缩小 (Zoom Out)">−</button>
+          <button id="mmd-modal-zoom-reset" class="code-mini-btn" type="button" title="100% 原始比例">100%</button>
+          <button id="mmd-modal-zoom-fit" class="code-mini-btn" type="button" title="适应窗口总览 (Fit to Screen)">⊡ 适应窗口</button>
+          <button id="mmd-modal-zoom-in" class="code-mini-btn" type="button" title="放大 (Zoom In)">+</button>
+          <button id="mmd-modal-download" class="code-mini-btn" type="button" title="Download vector SVG">⬇ SVG</button>
+          <button id="mmd-modal-close" class="icon-btn sm" type="button" title="Close (Esc)">✕</button>
+        </div>
+      </div>
+      <div id="mermaid-modal-viewport" class="mermaid-modal-viewport">
+        <div id="mermaid-modal-canvas" class="mermaid-panzoom-canvas"></div>
+      </div>
+    </div>
+  </div>
+
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/highlight.min.js"></script>
   <script src="/vendor/katex.min.js"></script>

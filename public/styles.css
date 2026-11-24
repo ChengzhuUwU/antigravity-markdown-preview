@@ -1545,10 +1545,63 @@ html[data-tables="expand"] .table-card:not(.force-compact) td,
 }
 
 .mermaid-stage {
-  padding: 16px;
-  overflow-x: auto;
+  position: relative;
+  padding: 20px;
+  min-height: 140px;
+  max-height: 680px;
+  overflow: hidden;
   display: flex;
+  align-items: center;
   justify-content: center;
+  cursor: grab;
+  user-select: none;
+  background: radial-gradient(circle, var(--border) 0.85px, transparent 0.85px);
+  background-size: 18px 18px;
+}
+
+.mermaid-stage.panning,
+.mermaid-modal-viewport.panning {
+  cursor: grabbing;
+}
+
+.mermaid-panzoom-canvas {
+  transform-origin: center center;
+  transition: transform 0.08s ease-out;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mermaid-stage.panning .mermaid-panzoom-canvas,
+.mermaid-modal-viewport.panning .mermaid-panzoom-canvas {
+  transition: none;
+}
+
+.mermaid-panzoom-canvas svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+.mermaid-fullscreen-panel {
+  width: 95vw;
+  height: 91vh;
+  max-width: 95vw;
+  max-height: 91vh;
+}
+
+.mermaid-modal-viewport {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  user-select: none;
+  background-color: var(--bg-surface);
+  background-image: radial-gradient(circle, var(--border) 1px, transparent 1px);
+  background-size: 20px 20px;
 }
 
 .notice-banner {

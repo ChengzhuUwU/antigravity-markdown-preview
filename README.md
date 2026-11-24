@@ -22,11 +22,15 @@ Transform dense terminal streams, 1,000+ step agent trajectories, LaTeX math, wi
 - **Dual File Previews & Persistent `Docs / Clips` Shelf**:
   - Click any local hyperlink to inspect it in a **Popup Preview Modal**, or click **`Open in sidebar`** (supported across Markdown docs, code files with `#L16-L20` line-range highlighting, and images) to pin it in the resizable **Right Split Pane** — complete with one-click **`📂 目录` (Reveal in Explorer/Finder)**.
   - Dedicated **`Docs / Clips`** workspace persisted in OS user data (`%APPDATA%/agy-markdown-preview` on Windows, `~/Library/Application Support/...` on macOS, `~/.local/share/...` on Linux) featuring pointer-hover previews, drag-and-drop sorting, inline renaming, and native file picking.
-- **Publication-Grade Offline Markdown**:
-  - Zero-CDN offline `marked` + `highlight.js` + `KaTeX` (`$...$`, `$$...$$`, `\(...\)`, `\[...\]`) + lazy `Mermaid` diagrams.
+- **Publication-Grade Offline Markdown & Mermaid v12 ELK**:
+  - Zero-CDN offline `marked` + `highlight.js` + `KaTeX` (`$...$`, `$$...$$`, `\(...\)`, `\[...\]`) + **Mermaid v12 (`ELK` orthogonal port routing, rounded 90° elbows, multi-stage pastel pills, interactive pan/zoom, fullscreen canvas, and vector SVG export)**.
   - Accurate GitHub & Obsidian Alerts (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`), CJK bold punctuation fix, and **Expandable Wide Tables** (`Tables: Expand` — natural column expansion capped at `50vw` with smooth horizontal slider).
 
 ## Screenshots
+
+### Mermaid v12 + ELK Orthogonal Pastel Renderer & Fullscreen Interactive Canvas
+
+![Mermaid v12 ELK Fullscreen Canvas](docs/screenshots/mermaid-elk-fullscreen.png)
 
 ### Dark Mode & `/context` Window Visualization
 

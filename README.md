@@ -1,6 +1,6 @@
-# Antigravity Markdown Preview
+# Antigravity Session Preview
 
-A lightweight, real-time editorial **Markdown & Session Previewer** plugin for **Google Antigravity CLI (`agy`)** and **Antigravity 2.0**.
+A lightweight, real-time editorial **Session & Markdown Previewer** plugin for **Google Antigravity CLI (`agy`)** and **Antigravity 2.0**.
 
 Transform dense terminal streams, 1,000+ step agent trajectories, LaTeX math, wide benchmark tables, and local Markdown documentation into a calm, customizable reading workspace.
 
@@ -20,7 +20,7 @@ Transform dense terminal streams, 1,000+ step agent trajectories, LaTeX math, wi
   - **`/btw`**: Surfaces CLI `/btw` side questions from `history.jsonl` and lets you pin `/copy btw` Markdown answers directly to the conversation.
 - **Dual File Previews & Persistent `Docs / Clips` Shelf**:
   - Click any local hyperlink to inspect it in a **Popup Preview Modal**, or click **`Open in sidebar`** (supported across Markdown docs, code files with `#L16-L20` line-range highlighting, and images) to pin it in the resizable **Right Split Pane** — complete with one-click **`📂 Folder` (Reveal in Explorer/Finder)**.
-  - Dedicated **`Docs / Clips`** workspace persisted in OS user data (`%APPDATA%/agy-markdown-preview` on Windows, `~/Library/Application Support/...` on macOS, `~/.local/share/...` on Linux) featuring pointer-hover previews, drag-and-drop sorting, inline renaming, and native file picking.
+  - Dedicated **`Docs / Clips`** workspace persisted in OS user data (`%APPDATA%/agy-session-preview` on Windows, `~/Library/Application Support/agy-session-preview` on macOS, `~/.local/share/agy-session-preview` on Linux; legacy `agy-markdown-preview` data is automatically migrated) featuring pointer-hover previews, drag-and-drop sorting, inline renaming, and native file picking.
 - **Publication-Grade Offline Markdown & Mermaid v12 ELK**:
   - Zero-CDN offline `marked` + `highlight.js` + `KaTeX` (`$...$`, `$$...$$`, `\(...\)`, `\[...\]`) + **Mermaid v12 (`ELK` orthogonal port routing, rounded 90° elbows, multi-stage pastel pills, interactive pan/zoom, fullscreen canvas, and vector SVG export)**.
   - Accurate GitHub & Obsidian Alerts (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`), CJK bold punctuation fix, and **Expandable Wide Tables** (`Tables: Expand` — natural column expansion capped at `50vw` with smooth horizontal slider).
@@ -57,7 +57,7 @@ agy plugin install https://github.com/ChengzhuUwU/antigravity-session-preview
 git clone https://github.com/ChengzhuUwU/antigravity-session-preview.git
 cd antigravity-session-preview
 
-# Installs plugin to ~/.gemini/config/plugins/agy-markdown-preview
+# Installs plugin to ~/.gemini/config/plugins/agy-session-preview
 # and registers the `agy-preview` command into ~/.local/bin
 npm run install-plugin
 ```
@@ -65,7 +65,7 @@ npm run install-plugin
 Verify installation:
 
 ```bash
-agy plugin validate --strict ~/.gemini/config/plugins/agy-markdown-preview
+agy plugin validate --strict ~/.gemini/config/plugins/agy-session-preview
 agy plugin list
 ```
 
@@ -95,8 +95,8 @@ agy-preview --stop
 
 ### 2. Inside Antigravity CLI (`agy`) or Antigravity 2.0
 
-- Run `/preview` (or `/agy-markdown-preview:preview`) to launch/focus the live preview window for the active conversation.
-- In Antigravity 2.0 Desktop, open the native Side Pane (`sidecar://agy-markdown-preview/preview/`).
+- Run `/preview` (or `/agy-session-preview:preview`) to launch/focus the live preview window for the active conversation.
+- In Antigravity 2.0 Desktop, open the native Side Pane (`sidecar://agy-session-preview/preview/`).
 
 ---
 
@@ -125,9 +125,9 @@ npm test
 # Re-sync vendor assets from node_modules (optional when upgrading libraries)
 npm install && npm run sync-vendor
 
-# Package distributable plugin archive -> dist/agy-markdown-preview.zip
+# Package distributable plugin archive -> dist/agy-session-preview.zip
 npm run pack-plugin
-agy plugin validate --strict dist/agy-markdown-preview.zip
+agy plugin validate --strict dist/agy-session-preview.zip
 ```
 
 ## License

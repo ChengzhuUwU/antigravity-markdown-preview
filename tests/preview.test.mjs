@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { get as httpGet, request as httpRequest } from 'node:http';
@@ -10,7 +10,13 @@ import {
   normalizeToolArgs,
   unquoteToolArg,
 } from '../server/transcript.mjs';
-import { CustomPreviewStore, locateDroppedFileOnDisk, parseRawInput, stripAnsi } from '../server/custom-preview.mjs';
+import {
+  CustomPreviewStore,
+  locateDroppedFileOnDisk,
+  migrateLegacyDataDirIfNeeded,
+  parseRawInput,
+  stripAnsi,
+} from '../server/custom-preview.mjs';
 import { resolveSafeFilePath, startStandaloneServer } from '../server/app.mjs';
 import { classifyHref, isCodeFilePath, isPreviewableFilePath } from '../public/js/markdown.js';
 
@@ -373,5 +379,29 @@ test('Standalone server serves file-info, raw-file images, SSE hook stream, and 
     engine.close();
     await new Promise((r) => server.close(r));
     rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('migrateLegacyDataDirIfNeeded copies legacy agy-markdown-preview docs, clips, and btw-notes non-destructively', () => {
+  const root = mkdtempSync(join(tmpdir(), 'amp-mig-'));
+  try {
+    const legacyDir = join(root, 'agy-markdown-preview');
+    const targetDir = join(root, 'agy-session-preview');
+    mkdirSync(join(legacyDir, 'clips'), { recursive: true });
+    writeFileSync(join(legacyDir, 'docs-store.json'), JSON.stringify({ counter: 2, items: [{ id: 'doc-1', title: 'Old' }] }));
+    writeFileSync(join(legacyDir, 'clips', 'doc-1.txt'), '# Migrated Clip');
+    writeFileSync(join(legacyDir, 'btw-notes.json'), JSON.stringify({ c1: [{ id: 'btw-1', question: 'Q', answer: 'A' }] }));
+
+    assert.equal(migrateLegacyDataDirIfNeeded(targetDir, legacyDir), true);
+    assert.equal(existsSync(join(targetDir, 'docs-store.json')), true);
+    assert.equal(readFileSync(join(targetDir, 'clips', 'doc-1.txt'), 'utf-8'), '# Migrated Clip');
+    assert.match(readFileSync(join(targetDir, 'btw-notes.json'), 'utf-8'), /btw-1/);
+
+    // Subsequent run must not overwrite newer files in targetDir
+    writeFileSync(join(targetDir, 'btw-notes.json'), JSON.stringify({ c1: [{ id: 'btw-2', question: 'New', answer: 'B' }] }));
+    assert.equal(migrateLegacyDataDirIfNeeded(targetDir, legacyDir), false);
+    assert.match(readFileSync(join(targetDir, 'btw-notes.json'), 'utf-8'), /btw-2/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

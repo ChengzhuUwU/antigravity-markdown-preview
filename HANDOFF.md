@@ -1,4 +1,4 @@
-# HANDOFF — Antigravity Markdown Preview (`agy-markdown-preview`)
+# HANDOFF — Antigravity Session Preview (`agy-session-preview`)
 
 > **Last Updated**: 2026-11-25
 > **Current Version**: `v0.2.1` (Synced with `origin/main`)
@@ -14,11 +14,11 @@ This document provides complete architectural context, user UX contracts, platfo
 | Component | Path / Value | Notes |
 |---|---|---|
 | **Source Repository** | `E:\OpenSources2\agy_plugin\antigravity-markdown-preview` | Primary git working tree (`main` branch) |
-| **Installed Global Plugin** | `C:\Users\24017\.gemini\config\plugins\agy-markdown-preview` | Synced via `npm run install-plugin` ([scripts/install-plugin.mjs](scripts/install-plugin.mjs)) |
+| **Installed Global Plugin** | `C:\Users\24017\.gemini\config\plugins\agy-session-preview` | Synced via `npm run install-plugin` ([scripts/install-plugin.mjs](scripts/install-plugin.mjs); removes legacy `agy-markdown-preview` install) |
 | **Global CLI Shim** | `C:\Users\24017\.local\bin\agy-preview.cmd` | Invokes installed `bin/agy-preview.mjs` from any terminal |
-| **Runtime Lock & Logs** | `C:\Users\24017\.gemini\cache\agy-markdown-preview\` | Ephemeral `server.json` (`{ pid, port, startedAt }`) & `server.log` |
-| **Persistent User Data** | `%APPDATA%\agy-markdown-preview\` (`C:\Users\24017\AppData\Roaming\agy-markdown-preview`) | `docs-store.json`, `clips\*.txt`, and `btw-notes.json` (macOS: `~/Library/Application Support/...`, Linux: `~/.local/share/...`) |
-| **Distributable Zip** | `dist/agy-markdown-preview.zip` | Built via `npm run pack-plugin`, validated with `agy plugin validate --strict` |
+| **Runtime Lock & Logs** | `C:\Users\24017\.gemini\cache\agy-session-preview\` | Ephemeral `server.json` (`{ pid, port, startedAt }`) & `server.log` |
+| **Persistent User Data** | `%APPDATA%\agy-session-preview\` (`C:\Users\24017\AppData\Roaming\agy-session-preview`) | `docs-store.json`, `clips\*.txt`, and `btw-notes.json` (auto-migrated from legacy `agy-markdown-preview`; macOS: `~/Library/Application Support/...`, Linux: `~/.local/share/...`) |
+| **Distributable Zip** | `dist/agy-session-preview.zip` | Built via `npm run pack-plugin`, validated with `agy plugin validate --strict` |
 | **Runtime Engine** | Node.js `>= 22.5.0` | Uses built-in `node:http`, `node:sqlite` (`DatabaseSync`), and `node:test`; **zero runtime npm dependencies** |
 
 ### Release History Ledger
@@ -39,7 +39,7 @@ flowchart LR
     DB["conversation_summaries.db (SQLite + FTS5)"]
     JSONL["brain/<id>/transcript.jsonl"]
     HIST["history.jsonl + Hook stdin"]
-    DOCS["%APPDATA%/agy-markdown-preview/docs-store.json"]
+    DOCS["%APPDATA%/agy-session-preview/docs-store.json"]
   end
 
   subgraph Backend["Zero-Dep Node Server (server/)"]
@@ -77,10 +77,10 @@ flowchart LR
 ### Core Source Files
 
 - **Plugin Manifests & Hooks**:
-  - [plugin.json](plugin.json#L1-L12) — Plugin metadata (`agy-markdown-preview`, `v0.2.1`).
+  - [plugin.json](plugin.json#L1-L12) — Plugin metadata (`agy-session-preview`, `v0.2.1`).
   - [hooks.json](hooks.json#L1-L44) — Subscribes `scripts/hook-sync.mjs` to `SessionStart`, `PreInvocation`, `PostToolUse`, `PostInvocation`, and `Stop` (3s timeout, fail-open).
   - [skills/preview/SKILL.md](skills/preview/SKILL.md) — `/preview` slash command instructions for `agy`.
-  - [sidecars/preview/main.mjs](sidecars/preview/main.mjs#L1-L64) & [sidecars/preview/sidecar.json](sidecars/preview/sidecar.json) — Antigravity 2.0 Desktop `sidecar://agy-markdown-preview/preview/` adapter with `x-sidecar-token` validation.
+  - [sidecars/preview/main.mjs](sidecars/preview/main.mjs#L1-L64) & [sidecars/preview/sidecar.json](sidecars/preview/sidecar.json) — Antigravity 2.0 Desktop `sidecar://agy-session-preview/preview/` adapter with `x-sidecar-token` validation.
 - **CLI & Build Scripts**:
   - [bin/agy-preview.mjs](bin/agy-preview.mjs#L1-L342) — Standalone CLI (`--conv`, `--file`, `--stdin`, `--status`, `--stop`, `--foreground`), background daemon spawner, and Chromium/Edge `--app=<url>` launcher.
   - [scripts/hook-sync.mjs](scripts/hook-sync.mjs#L59-L165) — Forwards live invocation phases to `/api/hook-event` and intercepts ephemeral `/btw` side-question fork transcripts before `agy` deletes them, archiving answers into `btw-notes.json`.
@@ -167,13 +167,13 @@ node --check server/custom-preview.mjs; if ($LASTEXITCODE -ne 0) { exit $LASTEXI
 # 2. Run automated unit & integration tests (Node built-in test runner)
 npm test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-# 3. Install to ~/.gemini/config/plugins/agy-markdown-preview & pack dist zip
+# 3. Install to ~/.gemini/config/plugins/agy-session-preview & pack dist zip
 npm run install-plugin; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 npm run pack-plugin; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # 4. Strict Antigravity plugin schema validation
-agy plugin validate --strict "$HOME\.gemini\config\plugins\agy-markdown-preview"
-agy plugin validate --strict "dist\agy-markdown-preview.zip"
+agy plugin validate --strict "$HOME\.gemini\config\plugins\agy-session-preview"
+agy plugin validate --strict "dist\agy-session-preview.zip"
 ```
 
 > **Note on Reloading**: If the user already has `agy-preview` running in the background while you update `server/*`, run `agy-preview --stop` so their next `agy-preview` or `/preview` invocation spawns the updated server code. Frontend-only changes under `public/` take effect immediately after `npm run install-plugin` + browser refresh (`Ctrl+R`) because `server/app.mjs` serves `public/` with `Cache-Control: no-store`.

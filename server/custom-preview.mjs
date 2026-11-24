@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { buildNormalizedView, getGeminiRoot, listConversations } from './transcript.mjs';
@@ -310,19 +310,64 @@ function convertStreamJsonToSteps(events) {
   return steps;
 }
 
+function resolveOsDataDir(folderName) {
+  if (process.platform === 'win32') {
+    const appData = process.env.APPDATA || join(homedir(), 'AppData', 'Roaming');
+    return join(appData, folderName);
+  }
+  if (process.platform === 'darwin') {
+    return join(homedir(), 'Library', 'Application Support', folderName);
+  }
+  const xdgData = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
+  return join(xdgData, folderName);
+}
+
 export function getDefaultDocsDataDir() {
   if (process.env.AGY_PREVIEW_DATA_DIR) {
     return resolve(process.env.AGY_PREVIEW_DATA_DIR);
   }
-  if (process.platform === 'win32') {
-    const appData = process.env.APPDATA || join(homedir(), 'AppData', 'Roaming');
-    return join(appData, 'agy-markdown-preview');
+  return resolveOsDataDir('agy-session-preview');
+}
+
+export function getLegacyDocsDataDir() {
+  if (process.env.AGY_PREVIEW_DATA_DIR) {
+    return '';
   }
-  if (process.platform === 'darwin') {
-    return join(homedir(), 'Library', 'Application Support', 'agy-markdown-preview');
+  return resolveOsDataDir('agy-markdown-preview');
+}
+
+export function migrateLegacyDataDirIfNeeded(targetDir = getDefaultDocsDataDir(), legacyDir = getLegacyDocsDataDir()) {
+  if (!targetDir || !legacyDir || resolve(targetDir) === resolve(legacyDir) || !existsSync(legacyDir)) {
+    return false;
   }
-  const xdgData = process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share');
-  return join(xdgData, 'agy-markdown-preview');
+  let migrated = false;
+  try {
+    mkdirSync(targetDir, { recursive: true });
+    for (const fileName of ['docs-store.json', 'btw-notes.json', 'auth-config.json']) {
+      const src = join(legacyDir, fileName);
+      const dst = join(targetDir, fileName);
+      if (existsSync(src) && !existsSync(dst)) {
+        cpSync(src, dst, { force: false, errorOnExist: false });
+        migrated = true;
+      }
+    }
+    const legacyClips = join(legacyDir, 'clips');
+    const targetClips = join(targetDir, 'clips');
+    if (existsSync(legacyClips)) {
+      mkdirSync(targetClips, { recursive: true });
+      for (const entry of readdirSync(legacyClips)) {
+        const srcClip = join(legacyClips, entry);
+        const dstClip = join(targetClips, entry);
+        if (!existsSync(dstClip)) {
+          cpSync(srcClip, dstClip, { recursive: true, force: false, errorOnExist: false });
+          migrated = true;
+        }
+      }
+    }
+  } catch {
+    // Best-effort non-destructive migration
+  }
+  return migrated;
 }
 
 const DEFAULT_PERSIST_PATH = join(getDefaultDocsDataDir(), 'docs-store.json');
@@ -347,11 +392,9 @@ export class CustomPreviewStore {
   }
 
   #migrateLegacyCacheIfNeeded() {
-    if (
-      this.#persistPath === DEFAULT_PERSIST_PATH &&
-      !existsSync(this.#persistPath) &&
-      existsSync(LEGACY_CACHE_PERSIST_PATH)
-    ) {
+    if (this.#persistPath !== DEFAULT_PERSIST_PATH) return;
+    migrateLegacyDataDirIfNeeded(dirname(this.#persistPath), getLegacyDocsDataDir());
+    if (!existsSync(this.#persistPath) && existsSync(LEGACY_CACHE_PERSIST_PATH)) {
       try {
         mkdirSync(dirname(this.#persistPath), { recursive: true });
         writeFileSync(this.#persistPath, readFileSync(LEGACY_CACHE_PERSIST_PATH, 'utf-8'), 'utf-8');

@@ -762,7 +762,7 @@ async function openConversation(convId, { scrollToLatestUser = true } = {}) {
 function renderCustomPreview(doc) {
   state.currentCustomDoc = doc;
   state.currentBaseDir = doc.baseDir || '';
-  el('doc-title').textContent = doc.title || 'Markdown Preview';
+  el('doc-title').textContent = doc.title || t('brandTitle');
   const column = el('reader-column');
 
   if (doc.parsed?.mode === 'transcript' && doc.parsed.view) {

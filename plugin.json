@@ -1,12 +1,12 @@
 {
-  "name": "agy-markdown-preview",
-  "displayName": "Markdown Preview",
+  "name": "agy-session-preview",
+  "displayName": "Session Preview",
   "version": "0.2.1",
-  "description": "Lightweight editorial Markdown & Session previewer for Antigravity CLI & Desktop with 2x8 customizable color themes, collapsed thinking/tools, live SSE sync, KaTeX, Mermaid, and GitHub callouts.",
+  "description": "Lightweight editorial Session & Markdown previewer for Antigravity CLI & Desktop with 2x8 customizable color themes, collapsed thinking/tools, live SSE sync, KaTeX, Mermaid, and GitHub callouts.",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [
-    "/preview Open the live Markdown preview window for this conversation",
+    "/preview Open the live Session Preview window for this conversation",
     "/preview Preview a markdown file or raw CLI stream output",
-    "Open the Markdown Preview side pane for this session"
+    "Open the Session Preview side pane for this session"
   ]
 }

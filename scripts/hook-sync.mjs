@@ -3,17 +3,27 @@ import { request as httpRequest } from 'node:http';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
-const SERVER_JSON = join(homedir(), '.gemini', 'cache', 'agy-markdown-preview', 'server.json');
+const SERVER_JSON = join(homedir(), '.gemini', 'cache', 'agy-session-preview', 'server.json');
+const LEGACY_SERVER_JSON = join(homedir(), '.gemini', 'cache', 'agy-markdown-preview', 'server.json');
+
+function resolveOsDataDir(folderName) {
+  if (process.platform === 'win32') {
+    return join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), folderName);
+  }
+  if (process.platform === 'darwin') {
+    return join(homedir(), 'Library', 'Application Support', folderName);
+  }
+  return join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), folderName);
+}
 
 function getDocsDataDir() {
   if (process.env.AGY_PREVIEW_DATA_DIR) return resolve(process.env.AGY_PREVIEW_DATA_DIR);
-  if (process.platform === 'win32') {
-    return join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'agy-markdown-preview');
-  }
-  if (process.platform === 'darwin') {
-    return join(homedir(), 'Library', 'Application Support', 'agy-markdown-preview');
-  }
-  return join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'agy-markdown-preview');
+  return resolveOsDataDir('agy-session-preview');
+}
+
+function getLegacyDocsDataDir() {
+  if (process.env.AGY_PREVIEW_DATA_DIR) return '';
+  return resolveOsDataDir('agy-markdown-preview');
 }
 
 function readStdinSyncFast() {
@@ -132,8 +142,10 @@ function tryCaptureBtwSideAnswer(payload) {
     const btwStorePath = join(getDocsDataDir(), 'btw-notes.json');
     mkdirSync(dirname(btwStorePath), { recursive: true });
     let allNotes = {};
-    if (existsSync(btwStorePath)) {
-      try { allNotes = JSON.parse(readFileSync(btwStorePath, 'utf-8')) || {}; } catch { allNotes = {}; }
+    const legacyBtwPath = getLegacyDocsDataDir() ? join(getLegacyDocsDataDir(), 'btw-notes.json') : '';
+    const loadPath = existsSync(btwStorePath) ? btwStorePath : (legacyBtwPath && existsSync(legacyBtwPath) ? legacyBtwPath : '');
+    if (loadPath) {
+      try { allNotes = JSON.parse(readFileSync(loadPath, 'utf-8')) || {}; } catch { allNotes = {}; }
     }
     const convList = Array.isArray(allNotes[matched.parentConvId]) ? allNotes[matched.parentConvId] : [];
     const existingIdx = convList.findIndex((n) => n.id === `btw-${forkConvId}` || n.question === matched.question);
@@ -206,8 +218,9 @@ async function main() {
     try { parsed = JSON.parse(raw); } catch {}
     const capturedBtw = parsed ? tryCaptureBtwSideAnswer(parsed) : null;
 
-    if (existsSync(SERVER_JSON)) {
-      const info = JSON.parse(readFileSync(SERVER_JSON, 'utf-8'));
+    const activeServerJson = existsSync(SERVER_JSON) ? SERVER_JSON : (existsSync(LEGACY_SERVER_JSON) ? LEGACY_SERVER_JSON : '');
+    if (activeServerJson) {
+      const info = JSON.parse(readFileSync(activeServerJson, 'utf-8'));
       if (info?.port) {
         await forwardToServer(info.port, raw);
         if (capturedBtw) {

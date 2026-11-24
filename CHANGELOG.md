@@ -1,6 +1,12 @@
 # Changelog
 
-All notable changes to **Antigravity Markdown Preview (`agy-markdown-preview`)** will be documented in this file.
+All notable changes to **Antigravity Session Preview (`agy-session-preview`)** will be documented in this file.
+
+## [Unreleased]
+
+### Changed
+- **Renamed Plugin ID & Display Name to Session Preview (`agy-session-preview`)**: Aligned plugin manifest (`plugin.json`), Sidecar UI (`sidecar://agy-session-preview/preview/`), frontend title & EN/ZH branding (`Session Preview` / `会话预览器`), hooks (`session-preview-sync`), package metadata (`antigravity-session-preview`), and docs with the renamed GitHub repository while keeping the `agy-preview` CLI command and `/preview` slash command intact.
+- **Automatic Legacy Data & Install Migration**: Automatically copies existing `docs-store.json`, `clips/`, and `btw-notes.json` from `%APPDATA%/agy-markdown-preview` (and macOS/Linux equivalents) into `agy-session-preview` on startup, and removes legacy `~/.gemini/config/plugins/agy-markdown-preview` during `npm run install-plugin`.
 
 ## [0.2.1] - 2026-11-24
 

@@ -2,7 +2,7 @@
 
 const MESSAGES = {
   en: {
-    brandTitle: 'Markdown Preview',
+    brandTitle: 'Session Preview',
     openPasteBtn: '+ Open / Paste',
     openPasteTip: 'Open local file or paste Markdown / CLI output (P)',
     tabSessions: 'Sessions',
@@ -74,7 +74,7 @@ const MESSAGES = {
     noOutline: 'No outline headings yet',
 
     // Empty states & Sidebar items
-    readyTitle: 'Markdown Preview Ready',
+    readyTitle: 'Session Preview Ready',
     readyHint: 'Run <code>agy-preview</code>, select a session on the left, or open/drop any <code>.md</code> / <code>.jsonl</code> file.',
     noDocsYet: 'No standalone Markdown or CLI clips yet.<br><br>Click <strong>📂 Browse…</strong>, <strong>+ Open / Paste</strong>, or drag any <code>.md</code> / <code>.jsonl</code> file onto this window.',
     docsEmptyTitle: 'Docs / Clips',
@@ -186,7 +186,7 @@ const MESSAGES = {
   },
 
   zh: {
-    brandTitle: 'Markdown 预览器',
+    brandTitle: '会话预览器',
     openPasteBtn: '+ 打开 / 粘贴',
     openPasteTip: '打开本地文件或粘贴 Markdown / CLI 输出 (P)',
     tabSessions: '会话列表',
@@ -258,7 +258,7 @@ const MESSAGES = {
     noOutline: '暂无标题大纲',
 
     // Empty states & Sidebar items
-    readyTitle: 'Markdown 预览器已就绪',
+    readyTitle: '会话预览器已就绪',
     readyHint: '运行 <code>agy-preview</code>，在左侧选择会话，或直接拖入任意 <code>.md</code> / <code>.jsonl</code> 文件。',
     noDocsYet: '暂无独立文档或文本片段。<br><br>可点击上方 <strong>📂 浏览…</strong>、<strong>+ 打开 / 粘贴</strong>，或直接将 <code>.md</code> / <code>.jsonl</code> 文件拖入窗口。',
     docsEmptyTitle: '文档 / 片段',

@@ -10,8 +10,9 @@ import { fileURLToPath } from 'node:url';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(HERE, '..');
 const SERVER_ENTRY = join(PLUGIN_ROOT, 'server', 'app.mjs');
-const RUNTIME_DIR = join(homedir(), '.gemini', 'cache', 'agy-markdown-preview');
+const RUNTIME_DIR = join(homedir(), '.gemini', 'cache', 'agy-session-preview');
 const SERVER_JSON = join(RUNTIME_DIR, 'server.json');
+const LEGACY_SERVER_JSON = join(homedir(), '.gemini', 'cache', 'agy-markdown-preview', 'server.json');
 const SERVER_LOG = join(RUNTIME_DIR, 'server.log');
 
 const DEFAULT_PORT = 19420;
@@ -131,16 +132,18 @@ function findPreferredOrFreePort(preferred = DEFAULT_PORT) {
 }
 
 async function getRunningServer() {
-  if (!existsSync(SERVER_JSON)) return null;
-  try {
-    const info = JSON.parse(readFileSync(SERVER_JSON, 'utf-8'));
-    if (!info?.port) return null;
-    const res = await httpJson(info.port, '/api/health', 'GET', null, 500);
-    if (res.status === 200 && res.data?.ok) {
-      return { ...info, clients: res.data.clients || 0 };
+  for (const lockFile of [SERVER_JSON, LEGACY_SERVER_JSON]) {
+    if (!existsSync(lockFile)) continue;
+    try {
+      const info = JSON.parse(readFileSync(lockFile, 'utf-8'));
+      if (!info?.port) continue;
+      const res = await httpJson(info.port, '/api/health', 'GET', null, 500);
+      if (res.status === 200 && res.data?.ok) {
+        return { ...info, clients: res.data.clients || 0 };
+      }
+    } catch {
+      // Stale lock file
     }
-  } catch {
-    // Stale lock file
   }
   return null;
 }
@@ -266,7 +269,9 @@ async function main() {
     if (running?.pid) {
       try { process.kill(running.pid); } catch {}
     }
-    if (existsSync(SERVER_JSON)) rmSync(SERVER_JSON, { force: true });
+    for (const lockFile of [SERVER_JSON, LEGACY_SERVER_JSON]) {
+      if (existsSync(lockFile)) rmSync(lockFile, { force: true });
+    }
     console.log(JSON.stringify({ stopped: true }));
     return;
   }

@@ -879,5 +879,5 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import
   const portArgIdx = process.argv.indexOf('--port');
   const port = portArgIdx !== -1 ? Number(process.argv[portArgIdx + 1]) || 0 : (Number(process.env.PREVIEW_PORT) || 0);
   const { port: boundPort } = await startStandaloneServer({ port });
-  console.log(`[agy-markdown-preview] listening on http://127.0.0.1:${boundPort}`);
+  console.log(`[agy-session-preview] listening on http://127.0.0.1:${boundPort}`);
 }

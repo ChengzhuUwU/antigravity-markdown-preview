@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(import.meta.url), '..', '..');
 const DIST_DIR = join(ROOT, 'dist');
-const STAGE_DIR = join(DIST_DIR, 'stage', 'agy-markdown-preview');
-const OUT_ZIP = join(DIST_DIR, 'agy-markdown-preview.zip');
+const STAGE_DIR = join(DIST_DIR, 'stage', 'agy-session-preview');
+const OUT_ZIP = join(DIST_DIR, 'agy-session-preview.zip');
 
 const INCLUDE_FILES = ['plugin.json', 'hooks.json', 'README.md', 'LICENSE'];
 const INCLUDE_DIRS = ['assets', 'bin', 'public', 'server', 'sidecars', 'skills'];

@@ -1,9 +1,9 @@
 {
-  "name": "antigravity-markdown-preview",
+  "name": "antigravity-session-preview",
   "version": "0.2.1",
   "private": true,
   "type": "module",
-  "description": "Lightweight real-time Markdown & Session previewer plugin for Antigravity CLI and Antigravity 2.0 with 2x8 color themes.",
+  "description": "Lightweight real-time Session & Markdown previewer plugin for Antigravity CLI and Antigravity 2.0 with 2x8 color themes.",
   "repository": {
     "type": "git",
     "url": "https://github.com/ChengzhuUwU/antigravity-session-preview.git"

@@ -1119,7 +1119,8 @@ export function listArtifacts(convDir) {
 export function listBtwCommands(convId, flavor = 'antigravity-cli') {
   if (!convId) return [];
   const safeFlavor = ALLOWED_FLAVORS.includes(flavor) ? flavor : 'antigravity-cli';
-  const histPath = join(getGeminiRoot(), safeFlavor, 'history.jsonl');
+  const flavorRoot = join(getGeminiRoot(), safeFlavor);
+  const histPath = join(flavorRoot, 'history.jsonl');
   if (!existsSync(histPath)) return [];
 
   const results = [];
@@ -1138,11 +1139,49 @@ export function listBtwCommands(convId, flavor = 'antigravity-cli') {
           rawCommand: trimmed,
           question: question || '(Reopened last /btw card)',
           isQuery: Boolean(question),
+          durationText: '',
+          toolCalls: null,
+          status: '',
         });
       } catch {}
     }
   } catch {}
-  return results.sort((a, b) => a.timestamp - b.timestamp);
+
+  results.sort((a, b) => a.timestamp - b.timestamp);
+
+  // Enrich with completion duration & tool-call count from ~/.gemini/<flavor>/log/cli-*.log when available
+  const logDir = join(flavorRoot, 'log');
+  if (results.some((r) => r.isQuery) && existsSync(logDir)) {
+    try {
+      const logFiles = readdirSync(logDir).filter((f) => f.startsWith('cli-') && f.endsWith('.log')).sort().slice(-3);
+      const completions = [];
+      for (const fn of logFiles) {
+        const yearMatch = fn.match(/^cli-(\d{4})/);
+        const year = yearMatch ? Number(yearMatch[1]) : new Date().getFullYear();
+        const txt = readFileSync(join(logDir, fn), 'utf-8');
+        for (const l of txt.split(/\r?\n/)) {
+          if (!l.includes('btw side question')) continue;
+          const m = l.match(/^I(\d{2})(\d{2})\s+(\d{2}):(\d{2}):(\d{2}).*?btw side question\s+([0-9a-f-]+)\s+ended after\s+([^\s]+)\s+and\s+(\d+)\s+tool calls:\s+(\w+)/i);
+          if (m) {
+            const endMs = new Date(year, Number(m[1]) - 1, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5])).getTime();
+            completions.push({ endMs, forkId: m[6], durationText: m[7], toolCalls: Number(m[8]), status: m[9] });
+          }
+        }
+      }
+      for (const r of results) {
+        if (!r.isQuery || !r.timestamp) continue;
+        const hit = completions.find((c) => c.endMs >= r.timestamp - 2000 && c.endMs <= r.timestamp + 20 * 60 * 1000 && !c._used);
+        if (hit) {
+          hit._used = true;
+          r.durationText = hit.durationText;
+          r.toolCalls = hit.toolCalls;
+          r.status = hit.status;
+        }
+      }
+    } catch {}
+  }
+
+  return results;
 }
 
 const rollingUsageCache = new Map(); // flavor -> { computedAt, data }

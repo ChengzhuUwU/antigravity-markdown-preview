@@ -1,5 +1,5 @@
 import { escapeHtml, slugifyHeading, renderMarkdownHtml, enhanceMarkdownDom, attachCodeCardInteractions } from './markdown.js';
-import { TranscriptRenderer } from './transcript-view.js';
+import { TranscriptRenderer, formatCompactTokens, renderCliInsightsHtml } from './transcript-view.js';
 
 const isSidecar = Boolean(window.sidecar && typeof window.sidecar.fetch === 'function');
 const apiFetch = (url, opts) => (isSidecar ? window.sidecar.fetch(url, opts) : fetch(url, opts));
@@ -55,6 +55,8 @@ const state = {
   sideCurrent: null,
   // Popup File Preview Modal state
   popupCurrent: null,
+  // Topbar CLI Tools Inspector tab ('btw' | 'context' | 'usage' | null)
+  activeCliToolTab: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -501,6 +503,17 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
         if (state.autoFollow && nearBottom && scrollEl) {
           scrollEl.scrollTop = scrollEl.scrollHeight;
         }
+        renderCliToolsDrawer();
+      }
+    } catch {}
+  });
+
+  es.addEventListener('btw-updated', (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      if (data.conversationId === state.activeConvId && state.currentViewData?.cliInsights) {
+        state.currentViewData.cliInsights.btwNotes = data.btwNotes || [];
+        renderCliToolsDrawer();
       }
     } catch {}
   });
@@ -644,6 +657,7 @@ async function openConversation(convId, { scrollToLatestUser = true } = {}) {
     if (scrollToLatestUser) {
       scrollToLastUserTurn();
     }
+    renderCliToolsDrawer();
     connectSSE({ convId });
   } catch (err) {
     el('reader-column').innerHTML = `<div class="notice-banner error">Failed to load conversation: ${escapeHtml(err.message)}</div>`;
@@ -935,12 +949,90 @@ function openZoomImage(src, alt) {
   modal.classList.remove('hidden');
 }
 
+function renderToolsMenu() {
+  const menu = el('tools-menu');
+  const toolsBtn = el('tools-btn');
+  if (!menu) return;
+  const view = state.currentViewData?.view;
+  const cli = state.currentViewData?.cliInsights;
+  const s = view?.summary || {};
+  const ctxPct = s.contextWindow?.limit ? `${((s.contextWindow.usageRatio || 0) * 100).toFixed(1)}%` : '';
+  const btwCount = ((cli?.btwCommands || []).filter((c) => c.isQuery).length) +
+    ((cli?.btwNotes || []).filter((n) => !(cli?.btwCommands || []).some((c) => c.question === n.question)).length);
+  const totalTok = (s.totalInputTokens || 0) + (s.totalCacheReadTokens || 0) + (s.totalOutputTokens || 0);
+
+  const items = [
+    { id: 'btw', cmd: '/btw', desc: 'Side Questions', badge: btwCount > 0 ? String(btwCount) : '' },
+    { id: 'context', cmd: '/context', desc: 'Context Window', badge: ctxPct },
+    { id: 'usage', cmd: '/usage', desc: 'Model Quotas & Tokens', badge: totalTok > 0 ? formatCompactTokens(totalTok) : '' },
+  ];
+
+  menu.innerHTML = `
+    <div class="theme-menu-section-label">Session Commands</div>
+    ${items.map((it) => {
+      const active = state.activeCliToolTab === it.id;
+      return `<button type="button" class="theme-menu-item ${active ? 'active' : ''}" data-open-cli-tool="${it.id}">
+        <span class="theme-menu-item-left">
+          <code style="font-size:0.75rem;">${it.cmd}</code>
+          <span style="font-size:0.74rem;color:var(--text-muted);">${it.desc}</span>
+        </span>
+        <span style="font-size:0.71rem;color:var(--text-faint);font-family:var(--font-mono);">${escapeHtml(it.badge)}</span>
+      </button>`;
+    }).join('')}
+  `;
+
+  if (toolsBtn) {
+    toolsBtn.classList.toggle('active', Boolean(state.activeCliToolTab));
+  }
+}
+
+function renderCliToolsDrawer() {
+  const drawer = el('cli-tools-drawer');
+  renderToolsMenu();
+  if (!drawer) return;
+  if (state.mode !== 'sessions' || !state.activeCliToolTab || !state.currentViewData?.view) {
+    drawer.classList.add('hidden');
+    return;
+  }
+
+  drawer.classList.remove('hidden');
+  const tab = state.activeCliToolTab;
+  const bodyHtml = renderCliInsightsHtml(
+    tab,
+    state.currentViewData.view,
+    state.currentViewData.cliInsights,
+    state.currentViewData.artifacts,
+    state.currentBaseDir
+  );
+
+  drawer.innerHTML = `
+    <div class="cli-tools-drawer-inner">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding-bottom:6px;border-bottom:1px solid var(--border);">
+        <div class="cli-insights-tabs">
+          <button type="button" class="cli-tab-btn ${tab === 'btw' ? 'active' : ''}" data-drawer-cli-tab="btw">/btw</button>
+          <button type="button" class="cli-tab-btn ${tab === 'context' ? 'active' : ''}" data-drawer-cli-tab="context">/context</button>
+          <button type="button" class="cli-tab-btn ${tab === 'usage' ? 'active' : ''}" data-drawer-cli-tab="usage">/usage</button>
+        </div>
+        <button type="button" class="icon-btn sm" data-close-cli-drawer title="Close tools panel (Esc)">✕</button>
+      </div>
+      ${bodyHtml}
+    </div>
+  `;
+  enhanceMarkdownDom(drawer, resolvedTheme());
+}
+
 function updateModeButtons() {
   const isSessions = state.mode === 'sessions';
   el('mode-sessions-btn')?.classList.toggle('active', isSessions);
   el('mode-docs-btn')?.classList.toggle('active', !isSessions);
   el('flavor-controls-row')?.classList.toggle('hidden', !isSessions);
   el('docs-controls-row')?.classList.toggle('hidden', isSessions);
+  el('tools-dropdown-wrap')?.classList.toggle('hidden', !isSessions);
+  if (!isSessions) {
+    el('cli-tools-drawer')?.classList.add('hidden');
+  } else {
+    renderCliToolsDrawer();
+  }
 }
 
 function exportCurrentMarkdown() {
@@ -1197,6 +1289,7 @@ async function bootstrap() {
   attachCodeCardInteractions(el('reader-column'), mdCallbacks);
   attachCodeCardInteractions(el('side-preview-body'), mdCallbacks);
   attachCodeCardInteractions(el('popup-preview-body'), mdCallbacks);
+  attachCodeCardInteractions(el('cli-tools-drawer'), mdCallbacks);
   initSidePaneResizer();
 
   // Sidebar & Toolbar listeners
@@ -1501,8 +1594,104 @@ async function bootstrap() {
   el('sync-btn')?.addEventListener('click', manualSync);
   el('export-btn')?.addEventListener('click', exportCurrentMarkdown);
 
+  // Jump to Top & Jump to Bottom buttons
+  el('jump-top-btn')?.addEventListener('click', () => {
+    el('reader-scroll')?.scrollTo({ top: 0, behavior: 'smooth' });
+  });
+  el('jump-bottom-btn')?.addEventListener('click', () => {
+    const sc = el('reader-scroll');
+    if (sc) sc.scrollTo({ top: sc.scrollHeight, behavior: 'smooth' });
+  });
+
+  // Topbar Tools (/btw, /context, /usage) dropdown & drawer
+  el('tools-btn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    el('theme-menu')?.classList.add('hidden');
+    renderToolsMenu();
+    el('tools-menu')?.classList.toggle('hidden');
+  });
+
+  el('tools-menu')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const btn = e.target.closest('[data-open-cli-tool]');
+    if (!btn) return;
+    const targetTab = btn.dataset.openCliTool;
+    state.activeCliToolTab = state.activeCliToolTab === targetTab ? null : targetTab;
+    el('tools-menu')?.classList.add('hidden');
+    renderCliToolsDrawer();
+  });
+
+  el('cli-tools-drawer')?.addEventListener('click', async (e) => {
+    const tabBtn = e.target.closest('[data-drawer-cli-tab]');
+    if (tabBtn) {
+      state.activeCliToolTab = tabBtn.dataset.drawerCliTab;
+      renderCliToolsDrawer();
+      return;
+    }
+    if (e.target.closest('[data-close-cli-drawer]')) {
+      state.activeCliToolTab = null;
+      renderCliToolsDrawer();
+      return;
+    }
+    const prefillBtw = e.target.closest('[data-action="prefill-btw-question"]');
+    if (prefillBtw) {
+      const det = el('cli-tools-drawer')?.querySelector('[data-btw-manual-details]');
+      if (det) det.open = true;
+      const qIn = el('cli-tools-drawer')?.querySelector('[data-btw-q-input]');
+      const aIn = el('cli-tools-drawer')?.querySelector('[data-btw-a-input]');
+      if (qIn) qIn.value = prefillBtw.dataset.question || '';
+      try {
+        const clip = await navigator.clipboard.readText();
+        if (clip && aIn && !aIn.value) aIn.value = clip;
+      } catch {}
+      aIn?.focus();
+      return;
+    }
+    if (e.target.closest('[data-action="paste-clipboard-btw"]')) {
+      const aIn = el('cli-tools-drawer')?.querySelector('[data-btw-a-input]');
+      try {
+        const clip = await navigator.clipboard.readText();
+        if (clip && aIn) aIn.value = clip;
+      } catch {}
+      return;
+    }
+    if (e.target.closest('[data-action="save-btw-note"]')) {
+      const q = el('cli-tools-drawer')?.querySelector('[data-btw-q-input]')?.value || '';
+      const a = el('cli-tools-drawer')?.querySelector('[data-btw-a-input]')?.value || '';
+      if (a.trim() && state.activeConvId) {
+        const res = await apiFetch(`/api/conversations/${encodeURIComponent(state.activeConvId)}/btw-notes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ question: q, answer: a }),
+        });
+        if (res.ok) {
+          const out = await res.json();
+          if (state.currentViewData?.cliInsights) {
+            state.currentViewData.cliInsights.btwNotes = out.notes || [];
+            renderCliToolsDrawer();
+          }
+        }
+      }
+      return;
+    }
+    const delBtw = e.target.closest('[data-action="delete-btw-note"]');
+    if (delBtw && state.activeConvId) {
+      const res = await apiFetch(`/api/conversations/${encodeURIComponent(state.activeConvId)}/btw-notes/${encodeURIComponent(delBtw.dataset.noteId)}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        const out = await res.json();
+        if (state.currentViewData?.cliInsights) {
+          state.currentViewData.cliInsights.btwNotes = out.notes || [];
+          renderCliToolsDrawer();
+        }
+      }
+    }
+  });
+
   el('theme-btn')?.addEventListener('click', (e) => {
     e.stopPropagation();
+    el('tools-menu')?.classList.add('hidden');
     el('theme-menu')?.classList.toggle('hidden');
   });
 
@@ -1526,6 +1715,7 @@ async function bootstrap() {
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.theme-dropdown-wrap')) {
       el('theme-menu')?.classList.add('hidden');
+      el('tools-menu')?.classList.add('hidden');
     }
   });
 
@@ -1636,8 +1826,14 @@ async function bootstrap() {
       return;
     }
     if (e.key === 'Escape') {
-      if (!el('theme-menu')?.classList.contains('hidden')) {
+      if (!el('theme-menu')?.classList.contains('hidden') || !el('tools-menu')?.classList.contains('hidden')) {
         el('theme-menu')?.classList.add('hidden');
+        el('tools-menu')?.classList.add('hidden');
+        return;
+      }
+      if (state.activeCliToolTab) {
+        state.activeCliToolTab = null;
+        renderCliToolsDrawer();
         return;
       }
       if (!el('image-modal')?.classList.contains('hidden')) {

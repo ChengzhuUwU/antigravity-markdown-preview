@@ -2,7 +2,7 @@ import { escapeHtml, isPreviewableFilePath, renderMarkdownHtml, enhanceMarkdownD
 
 const CHEVRON_SVG = `<svg class="chevron-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5L10.5 8 6 12.5"/></svg>`;
 
-function formatCompactTokens(n) {
+export function formatCompactTokens(n) {
   if (!n || n <= 0) return '0';
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
@@ -406,7 +406,7 @@ function turnSignature(turn) {
   return `${turn.items.length}:${turn.stats.thinkingCount}:${turn.stats.toolCount}:${turn.stats.errorCount}:${lastTextLen}:${lastItem?.status || ''}:${JSON.stringify(lastItem?.tools?.map((t) => `${t.status}:${t.durationMs}`) || [])}`;
 }
 
-function renderCliInsightsHtml(tab, view, cliInsights, artifacts, baseDir) {
+export function renderCliInsightsHtml(tab, view, cliInsights, artifacts, baseDir) {
   const s = view?.summary || {};
   const ctx = s.contextWindow || {};
   const cats = ctx.categories || {};
@@ -451,12 +451,12 @@ function renderCliInsightsHtml(tab, view, cliInsights, artifacts, baseDir) {
           <span style="font-size:0.69rem;color:var(--text-faint);text-align:center;">1 cell ≈ ${formatCompactTokens(Math.round(limit / 100))} tokens</span>
         </div>
         <div class="context-breakdown-table">
-          <div class="ctx-row"><span><span class="ctx-dot" style="background:#7b8494;"></span>⛁ System, Tools &amp; Customizations</span><strong>${formatCompactTokens(cats.systemOverhead)}</strong></div>
-          <div class="ctx-row"><span><span class="ctx-dot" style="background:var(--info);"></span>◉ User messages</span><strong>${formatCompactTokens(cats.userMessages)}</strong></div>
-          <div class="ctx-row"><span><span class="ctx-dot" style="background:var(--accent);"></span>◉ Agent responses &amp; thinking</span><strong>${formatCompactTokens(cats.agentResponses)}</strong></div>
-          <div class="ctx-row"><span><span class="ctx-dot" style="background:var(--warning);"></span>◉ Tool calls &amp; outputs</span><strong>${formatCompactTokens(cats.toolCalls)}</strong></div>
-          <div class="ctx-row"><span><span class="ctx-dot" style="border:1px solid var(--border-strong);background:var(--bg-surface);"></span>□ Free context capacity</span><strong>${formatCompactTokens(cats.freeSpace)}</strong></div>
-          ${ctx.checkpointCount ? `<div class="ctx-row"><span>⊠ Checkpoints compacted (${ctx.checkpointCount})</span><strong>${formatCompactTokens(ctx.checkpointBufferTokens)} buffer</strong></div>` : ''}
+          <div class="ctx-row"><span><span class="ctx-dot" style="background:#7b8494;"></span>System, Tools &amp; Customizations</span><strong>${formatCompactTokens(cats.systemOverhead)}</strong></div>
+          <div class="ctx-row"><span><span class="ctx-dot" style="background:var(--info);"></span>User messages</span><strong>${formatCompactTokens(cats.userMessages)}</strong></div>
+          <div class="ctx-row"><span><span class="ctx-dot" style="background:var(--accent);"></span>Agent responses &amp; thinking</span><strong>${formatCompactTokens(cats.agentResponses)}</strong></div>
+          <div class="ctx-row"><span><span class="ctx-dot" style="background:var(--warning);"></span>Tool calls &amp; outputs</span><strong>${formatCompactTokens(cats.toolCalls)}</strong></div>
+          <div class="ctx-row"><span><span class="ctx-dot" style="border:1px solid var(--border-strong);background:var(--bg-surface);"></span>Free context capacity</span><strong>${formatCompactTokens(cats.freeSpace)}</strong></div>
+          ${ctx.checkpointCount ? `<div class="ctx-row"><span>Checkpoints compacted (${ctx.checkpointCount})</span><strong>${formatCompactTokens(ctx.checkpointBufferTokens)} buffer</strong></div>` : ''}
         </div>
       </div>
       ${artifactsHtml}
@@ -523,41 +523,56 @@ function renderCliInsightsHtml(tab, view, cliInsights, artifacts, baseDir) {
   const cmds = (cliInsights?.btwCommands || []).filter((c) => c.isQuery);
   const notes = cliInsights?.btwNotes || [];
 
-  const cmdItemsHtml = cmds.map((c, idx) => {
+  const cmdItemsHtml = cmds.map((c) => {
     const tStr = c.timestamp ? new Date(c.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
     const matchedNote = notes.find((n) => n.question === c.question);
+    const metaBadges = [];
+    if (c.status === 'answered' || matchedNote) metaBadges.push(`<span class="tool-status-pill done">answered</span>`);
+    const tCount = matchedNote?.toolCount ?? c.toolCalls;
+    if (tCount != null) metaBadges.push(`<span style="font-size:0.7rem;color:var(--text-faint);">${tCount} tools</span>`);
+    if (c.durationText) metaBadges.push(`<span style="font-size:0.7rem;color:var(--text-faint);">${escapeHtml(c.durationText)}</span>`);
+    if (tStr) metaBadges.push(`<span style="font-size:0.7rem;color:var(--text-faint);">${escapeHtml(tStr)}</span>`);
+
     return `<div class="btw-item-card">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
-        <span style="font-size:0.82rem;font-weight:600;color:var(--text-main);"><code>/btw</code> ${escapeHtml(c.question)}</span>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;">
+        <div style="display:flex;align-items:baseline;gap:6px;flex:1;min-width:200px;">
+          <span class="tool-name-pill" style="color:var(--accent);border-color:var(--accent-border);background:var(--accent-soft);">/btw</span>
+          <span style="font-size:0.86rem;font-weight:600;color:var(--text-main);line-height:1.45;">${escapeHtml(c.question)}</span>
+        </div>
         <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
-          <span style="font-size:0.7rem;color:var(--text-faint);">${escapeHtml(tStr)}</span>
-          ${!matchedNote ? `<button type="button" class="code-mini-btn" data-action="prefill-btw-question" data-question="${escapeHtml(c.question)}">📋 Attach /copy btw</button>` : ''}
+          ${metaBadges.join('')}
+          ${!matchedNote ? `<button type="button" class="code-mini-btn" data-action="prefill-btw-question" data-question="${escapeHtml(c.question)}">粘贴回答 (/copy btw)</button>` : `<button type="button" class="code-mini-btn" data-action="delete-btw-note" data-note-id="${escapeHtml(matchedNote.id)}">✕</button>`}
         </div>
       </div>
-      ${matchedNote ? `<div class="assistant-markdown" style="font-size:0.86rem;padding-top:6px;border-top:1px solid var(--border);">${renderMarkdownHtml(matchedNote.answer, { baseDir })}</div>` : `<div style="font-size:0.73rem;color:var(--text-faint);">CLI keeps <code>/btw</code> answers ephemeral out of main context. Run <code>/copy btw</code> in CLI and click <strong>Attach /copy btw</strong> to pin the answer here.</div>`}
+      ${matchedNote
+        ? `<div class="assistant-markdown" style="font-size:0.88rem;padding-top:8px;border-top:1px solid var(--border);">${renderMarkdownHtml(matchedNote.answer, { baseDir })}</div>`
+        : `<div style="font-size:0.74rem;color:var(--text-faint);">新提问的 <code>/btw</code> 回答将由插件 Hook 自动捕获保存；历史提问可在 CLI 执行 <code>/copy btw</code> 后点击右侧按钮粘贴固定。</div>`}
     </div>`;
   }).join('');
 
   const standaloneNotesHtml = notes
     .filter((n) => !cmds.some((c) => c.question === n.question))
     .map((n) => `<div class="btw-item-card">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <strong style="font-size:0.81rem;"><code>/btw</code> ${escapeHtml(n.question || 'Saved Side Answer')}</strong>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <div style="display:flex;align-items:baseline;gap:6px;">
+          <span class="tool-name-pill" style="color:var(--accent);border-color:var(--accent-border);background:var(--accent-soft);">/btw</span>
+          <strong style="font-size:0.85rem;">${escapeHtml(n.question || 'Saved Side Answer')}</strong>
+        </div>
         <button type="button" class="code-mini-btn" data-action="delete-btw-note" data-note-id="${escapeHtml(n.id)}">Remove</button>
       </div>
-      <div class="assistant-markdown" style="font-size:0.86rem;padding-top:6px;border-top:1px solid var(--border);">${renderMarkdownHtml(n.answer, { baseDir })}</div>
+      <div class="assistant-markdown" style="font-size:0.88rem;padding-top:8px;border-top:1px solid var(--border);">${renderMarkdownHtml(n.answer, { baseDir })}</div>
     </div>`).join('');
 
   return `
-    ${cmdItemsHtml || standaloneNotesHtml ? (cmdItemsHtml + standaloneNotesHtml) : `<div style="font-size:0.8rem;color:var(--text-muted);">No <code>/btw &lt;question&gt;</code> commands recorded in CLI history for this conversation yet.</div>`}
-    <details style="margin-top:4px;">
-      <summary style="cursor:pointer;font-size:0.76rem;color:var(--accent);font-weight:600;">+ Save a <code>/copy btw</code> Side Question &amp; Answer to this session</summary>
+    ${cmdItemsHtml || standaloneNotesHtml ? (cmdItemsHtml + standaloneNotesHtml) : `<div style="font-size:0.8rem;color:var(--text-muted);">当前会话暂无 <code>/btw</code> 侧边提问记录。在 CLI 中输入 <code>/btw &lt;问题&gt;</code> 后将自动在此归档显示。</div>`}
+    <details data-btw-manual-details style="margin-top:2px;">
+      <summary style="cursor:pointer;font-size:0.76rem;color:var(--accent);font-weight:600;user-select:none;">+ 手动粘贴保存 <code>/copy btw</code> 问答记录</summary>
       <div style="display:flex;flex-direction:column;gap:6px;margin-top:8px;">
-        <input type="text" class="input-sm" data-btw-q-input placeholder="Side question (optional)">
-        <textarea class="paste-area" style="min-height:90px;" data-btw-a-input placeholder="Run '/copy btw' in Antigravity CLI, then paste the Markdown answer here…"></textarea>
+        <input type="text" class="input-sm" data-btw-q-input placeholder="提问内容（可选）">
+        <textarea class="paste-area" style="min-height:84px;" data-btw-a-input placeholder="在 CLI 运行 /copy btw 后粘贴 Markdown 回答内容…"></textarea>
         <div style="display:flex;justify-content:flex-end;gap:6px;">
-          <button type="button" class="code-mini-btn" data-action="paste-clipboard-btw">Paste from Clipboard</button>
-          <button type="button" class="pill-btn primary" data-action="save-btw-note">Save /btw Answer</button>
+          <button type="button" class="code-mini-btn" data-action="paste-clipboard-btw">从剪贴板读取</button>
+          <button type="button" class="pill-btn primary" data-action="save-btw-note">保存回答</button>
         </div>
       </div>
     </details>
@@ -857,9 +872,6 @@ export class TranscriptRenderer {
       this.container.prepend(ribbon);
     }
     const s = view.summary || {};
-    const ctxPct = s.contextWindow?.limit ? `${((s.contextWindow.usageRatio || 0) * 100).toFixed(1)}%` : '';
-    const btwCount = ((this.lastCliInsights?.btwCommands || []).filter((c) => c.isQuery).length) +
-      ((this.lastCliInsights?.btwNotes || []).filter((n) => !(this.lastCliInsights?.btwCommands || []).some((c) => c.question === n.question)).length);
     const totalTokens = (s.totalInputTokens || 0) + (s.totalCacheReadTokens || 0) + (s.totalOutputTokens || 0);
     const parentLinkHtml = parentSession
       ? `<button type="button" class="open-sidebar-pill" data-open-conv="${escapeHtml(parentSession.id)}" title="Return to parent session">← Parent: ${escapeHtml(parentSession.title.slice(0, 32))}</button>`
@@ -872,40 +884,10 @@ export class TranscriptRenderer {
         <span class="ribbon-stat"><strong>${s.totalToolCalls || 0}</strong> tools</span>
         ${subagents.length > 0 ? `<span class="ribbon-stat"><strong>${subagents.length}</strong> subagents</span>` : ''}
         ${s.totalErrors ? `<span class="ribbon-stat" style="color:var(--error);"><strong>${s.totalErrors}</strong> errors</span>` : ''}
+        ${totalTokens > 0 ? `<span class="ribbon-stat"><strong>${formatCompactTokens(totalTokens)}</strong> tokens</span>` : ''}
       </div>
-      <div class="ribbon-cli-pills">
-        <button type="button" class="cli-cmd-pill ${this.activeCliTab === 'btw' ? 'active' : ''}" data-cli-tab="btw" title="Inspect /btw side questions &amp; attach /copy btw answers">/btw${btwCount > 0 ? ` (${btwCount})` : ''}</button>
-        <button type="button" class="cli-cmd-pill ${this.activeCliTab === 'context' ? 'active' : ''}" data-cli-tab="context" title="Inspect /context window usage grid &amp; breakdown">/context${ctxPct ? ` · ${ctxPct}` : ''}</button>
-        <button type="button" class="cli-cmd-pill ${this.activeCliTab === 'usage' ? 'active' : ''}" data-cli-tab="usage" title="Inspect /usage 5h &amp; 7d model token consumption">/usage${totalTokens > 0 ? ` · ${formatCompactTokens(totalTokens)}` : ''}</button>
-      </div>
+      <div style="font-size:0.72rem;color:var(--text-faint);">Execution process auto-collapsed</div>
     `;
-
-    // Interactive /btw, /context, /usage Inspector Card
-    let cliCard = this.container.querySelector(':scope > .cli-insights-card');
-    if (this.activeCliTab) {
-      if (!cliCard) {
-        cliCard = document.createElement('div');
-        cliCard.className = 'cli-insights-card';
-        ribbon.after(cliCard);
-      }
-      cliCard.innerHTML = `
-        <div class="cli-insights-header">
-          <div class="cli-insights-tabs">
-            <button type="button" class="cli-tab-btn ${this.activeCliTab === 'btw' ? 'active' : ''}" data-cli-tab="btw">💬 /btw</button>
-            <button type="button" class="cli-tab-btn ${this.activeCliTab === 'context' ? 'active' : ''}" data-cli-tab="context">⛁ /context</button>
-            <button type="button" class="cli-tab-btn ${this.activeCliTab === 'usage' ? 'active' : ''}" data-cli-tab="usage">📊 /usage</button>
-          </div>
-          <button type="button" class="icon-btn sm" data-action="close-cli-insights" title="Close panel">✕</button>
-        </div>
-        <div class="cli-insights-body">${renderCliInsightsHtml(this.activeCliTab, view, this.lastCliInsights, this.lastArtifacts, this.baseDir)}</div>
-      `;
-      enhanceMarkdownDom(cliCard, this.theme);
-    } else if (cliCard) {
-      cliCard.remove();
-      cliCard = null;
-    }
-
-    const afterCliAnchor = cliCard && cliCard.parentElement ? cliCard : ribbon;
 
     // Subagents collapsible overview card inside Session Preview (collapsed by default!)
     let subBanner = this.container.querySelector(':scope > .subagents-preview-card');
@@ -915,7 +897,7 @@ export class TranscriptRenderer {
       if (!subBanner) {
         subBanner = document.createElement('div');
         subBanner.className = 'process-fold-card subagents-preview-card';
-        afterCliAnchor.after(subBanner);
+        ribbon.after(subBanner);
       }
       subBanner.dataset.open = String(subOpen);
       subBanner.dataset.disclosureKey = subKey;
@@ -943,7 +925,7 @@ export class TranscriptRenderer {
       subBanner.remove();
     }
 
-    const anchorAfterRibbon = subBanner && subBanner.parentElement ? subBanner : afterCliAnchor;
+    const anchorAfterRibbon = subBanner && subBanner.parentElement ? subBanner : ribbon;
     let loadBtn = this.container.querySelector(':scope > .load-earlier-btn');
     if (startIdx > 0) {
       if (!loadBtn) {

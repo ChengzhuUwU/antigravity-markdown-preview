@@ -303,21 +303,29 @@ export function createPreviewEngine({ onExtraRoute, tokenValidator, storePersist
   const customStore = new CustomPreviewStore(storePersistPath !== undefined ? { persistPath: storePersistPath } : {});
   const btwNotesPath = customStore.persistPath ? join(dirname(customStore.persistPath), 'btw-notes.json') : '';
   const btwNotesByConv = new Map(); // convId -> [{ id, question, answer, createdAt }]
-  if (btwNotesPath && existsSync(btwNotesPath)) {
+  let btwNotesMtimeMs = 0;
+  const loadBtwNotesFromDisk = () => {
+    if (!btwNotesPath || !existsSync(btwNotesPath)) return;
     try {
+      const st = statSync(btwNotesPath);
+      if (st.mtimeMs <= btwNotesMtimeMs + 1) return;
       const savedBtw = JSON.parse(readFileSync(btwNotesPath, 'utf-8'));
+      btwNotesByConv.clear();
       if (savedBtw && typeof savedBtw === 'object') {
         for (const [cid, arr] of Object.entries(savedBtw)) {
           if (Array.isArray(arr)) btwNotesByConv.set(cid, arr);
         }
       }
+      btwNotesMtimeMs = st.mtimeMs;
     } catch {}
-  }
+  };
+  loadBtwNotesFromDisk();
   const saveBtwNotes = () => {
     if (!btwNotesPath) return;
     try {
       mkdirSync(dirname(btwNotesPath), { recursive: true });
       writeFileSync(btwNotesPath, JSON.stringify(Object.fromEntries(btwNotesByConv), null, 2), 'utf-8');
+      btwNotesMtimeMs = statSync(btwNotesPath).mtimeMs;
     } catch {}
   };
   const sseClients = new Set(); // { res, convId, previewId }
@@ -454,6 +462,7 @@ export function createPreviewEngine({ onExtraRoute, tokenValidator, storePersist
       const parentSession = catalogEntry?.parentConversationId
         ? allConvs.find((c) => c.id === catalogEntry.parentConversationId) || { id: catalogEntry.parentConversationId, title: 'Parent Session' }
         : null;
+      loadBtwNotesFromDisk();
       ensureTranscriptWatch(convId, resolved.flavor);
       return sendJson(res, 200, {
         conversationId: convId,
@@ -724,6 +733,15 @@ export function createPreviewEngine({ onExtraRoute, tokenValidator, storePersist
         const convId = payload.conversationId || '';
         const hookEventName = payload.hookEventName || '';
         const toolName = payload.toolCall?.name || '';
+
+        if (convId && hookEventName === 'BtwCaptured') {
+          loadBtwNotesFromDisk();
+          broadcastEvent('btw-updated', {
+            conversationId: convId,
+            btwNotes: btwNotesByConv.get(convId) || [],
+          });
+          return sendJson(res, 200, { ok: true });
+        }
 
         if (convId) {
           let phase = 'idle';

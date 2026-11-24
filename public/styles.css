@@ -1307,7 +1307,11 @@ html[data-prose="serif"] .assistant-markdown {
   text-decoration-color: var(--accent);
 }
 
-.assistant-markdown :not(pre) > code {
+code, kbd, samp {
+  font-family: var(--font-mono);
+}
+
+:not(pre) > code {
   font-family: var(--font-mono);
   font-size: 0.85em;
   padding: 1.5px 5px;
@@ -2076,12 +2080,23 @@ mark.find-hit.current {
   color: var(--accent);
 }
 
-.cli-insights-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+.cli-tools-drawer {
+  border-bottom: 1px solid var(--border);
   background: var(--bg-surface);
-  overflow: hidden;
+  max-height: 54vh;
+  overflow-y: auto;
   box-shadow: var(--shadow-sm);
+  z-index: 12;
+  flex-shrink: 0;
+}
+
+.cli-tools-drawer-inner {
+  max-width: var(--reader-max-width);
+  margin: 0 auto;
+  padding: 12px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .cli-insights-header {

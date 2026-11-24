@@ -63,6 +63,19 @@
         <div class="topbar-right">
           <button id="sync-btn" class="pill-btn" title="Sync now (R)">↻ Sync</button>
           <button id="find-toggle-btn" class="icon-btn" title="Find in page (Ctrl+K or /)" aria-label="Find">⌕</button>
+          <button id="jump-top-btn" class="icon-btn" type="button" title="跳转到顶部 / Jump to Top" aria-label="Jump to Top">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 2.5h10M8 13.5V5M4.5 8.5L8 5l3.5 3.5"/></svg>
+          </button>
+          <button id="jump-bottom-btn" class="icon-btn" type="button" title="跳转到底部 / Jump to Bottom" aria-label="Jump to Bottom">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13.5h10M8 2.5v8.5M4.5 7.5L8 11l3.5-3.5"/></svg>
+          </button>
+          <div id="tools-dropdown-wrap" class="theme-dropdown-wrap">
+            <button id="tools-btn" class="pill-btn" type="button" title="CLI Session Tools (/btw, /context, /usage)">
+              <span>Tools</span>
+              <span style="font-size:0.65rem;opacity:0.7;">▾</span>
+            </button>
+            <div id="tools-menu" class="theme-menu hidden" style="width:236px;" role="menu"></div>
+          </div>
           <button id="tables-btn" class="pill-btn" title="Expand table columns up to 50% page width with horizontal slider">Tables</button>
           <button id="width-btn" class="pill-btn" title="Toggle Width (W)">Width</button>
           <button id="prose-btn" class="pill-btn" title="Toggle Sans/Serif prose (F)">Aa</button>
@@ -86,6 +99,9 @@
         <button id="find-next-btn" class="code-mini-btn" type="button">Next</button>
         <button id="find-close-btn" class="code-mini-btn" type="button">Close</button>
       </div>
+
+      <!-- Top-Pinned Session Tools Inspector (/btw, /context, /usage) -->
+      <div id="cli-tools-drawer" class="cli-tools-drawer hidden"></div>
 
       <div class="content-stage">
         <div id="reader-scroll" class="reader-scroll">

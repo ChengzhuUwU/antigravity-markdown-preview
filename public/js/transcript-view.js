@@ -977,15 +977,21 @@ export class TranscriptRenderer {
 
   extractToc() {
     const items = [];
+    const seenIds = new Set();
     let headingIdx = 0;
     this.container.querySelectorAll('.turn-block').forEach((turnEl) => {
       const badge = turnEl.querySelector('.user-badge')?.textContent || turnEl.id;
       const snippet = turnEl.dataset.promptPreview || '';
       const fullTitle = turnEl.dataset.promptFull ? `${badge}: ${turnEl.dataset.promptFull}` : badge;
       const label = snippet ? `${badge} · ${snippet}` : badge;
+      seenIds.add(turnEl.id);
       items.push({ id: turnEl.id, label, fullTitle, level: 0, isTurn: true });
       turnEl.querySelectorAll(':scope > .assistant-markdown h1, :scope > .assistant-markdown h2, :scope > .assistant-markdown h3').forEach((h) => {
-        if (!h.id) h.id = `hd-${++headingIdx}`;
+        if (!h.id || seenIds.has(h.id)) {
+          const baseSlug = h.id || `hd-${++headingIdx}`;
+          h.id = `${turnEl.id}-${baseSlug}`;
+        }
+        seenIds.add(h.id);
         const level = Number(h.tagName.slice(1));
         items.push({ id: h.id, label: h.textContent.trim(), fullTitle: h.textContent.trim(), level, isTurn: false });
       });

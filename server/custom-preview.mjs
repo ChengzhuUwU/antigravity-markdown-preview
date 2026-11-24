@@ -1,6 +1,6 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join, resolve } from 'node:path';
 import { buildNormalizedView, getGeminiRoot, listConversations } from './transcript.mjs';
 
 const ANSI_RE = /\x1B\[[0-?]*[ -/]*[@-~]/g;
@@ -8,6 +8,20 @@ const SKIP_WALK_DIRS = new Set([
   '.git', 'node_modules', 'dist', 'build', 'target', 'out', '.next', '.nuxt',
   '.venv', 'venv', '__pycache__', '.pytest_cache', '.mypy_cache', '.idea', '.vscode',
 ]);
+
+export const MEDIA_EXT_KINDS = {
+  '.pdf': 'pdf',
+  '.mp4': 'video', '.webm': 'video', '.mov': 'video', '.m4v': 'video', '.ogv': 'video', '.mkv': 'video', '.avi': 'video',
+  '.mp3': 'audio', '.wav': 'audio', '.flac': 'audio', '.ogg': 'audio', '.oga': 'audio', '.m4a': 'audio', '.aac': 'audio', '.opus': 'audio', '.weba': 'audio',
+  '.png': 'image', '.jpg': 'image', '.jpeg': 'image', '.gif': 'image', '.webp': 'image', '.svg': 'image', '.bmp': 'image', '.ico': 'image', '.avif': 'image',
+  '.csv': 'csv', '.tsv': 'csv',
+};
+
+export function detectMediaDocKind(filePath) {
+  if (!filePath || typeof filePath !== 'string') return '';
+  const ext = extname(filePath).toLowerCase();
+  return MEDIA_EXT_KINDS[ext] || '';
+}
 
 export function stripAnsi(text) {
   return String(text ?? '').replace(ANSI_RE, '');
@@ -63,7 +77,6 @@ function collectKnownWorkspaceRoots() {
     } catch {}
   };
 
-  // 1. ~/.gemini/antigravity-cli/settings.json trustedWorkspaces
   const cliSettings = join(getGeminiRoot(), 'antigravity-cli', 'settings.json');
   if (existsSync(cliSettings)) {
     try {
@@ -74,7 +87,6 @@ function collectKnownWorkspaceRoots() {
     } catch {}
   }
 
-  // 2. ~/.gemini/config/projects/*.json folder URIs
   const projectsDir = join(getGeminiRoot(), 'config', 'projects');
   if (existsSync(projectsDir)) {
     try {
@@ -95,7 +107,6 @@ function collectKnownWorkspaceRoots() {
     } catch {}
   }
 
-  // 3. Active conversation workspaceUris across flavors
   for (const flavor of ['antigravity-cli', 'antigravity']) {
     try {
       for (const conv of listConversations(flavor, 300)) {
@@ -104,7 +115,6 @@ function collectKnownWorkspaceRoots() {
     } catch {}
   }
 
-  // 4. Parent project containers (e.g. E:\Projects, E:\OpenSources2) + common user folders
   for (const ws of directRoots) {
     const parent = dirname(ws);
     if (parent && parent !== ws && !/^[a-zA-Z]:[\\/]?$/.test(parent) && parent !== '/') {
@@ -118,11 +128,6 @@ function collectKnownWorkspaceRoots() {
   return [...directRoots, ...parentRoots];
 }
 
-/**
- * When a file is dragged from OS Explorer into a browser window, Chromium hides `file.path`.
- * Match `{ filename, content }` byte-for-byte against known workspaces so relative links resolve
- * against the true source directory!
- */
 export function locateDroppedFileOnDisk(filename, content, extraRoots = []) {
   if (!filename || typeof filename !== 'string' || typeof content !== 'string') return '';
   const cleanName = basename(filename);
@@ -133,7 +138,6 @@ export function locateDroppedFileOnDisk(filename, content, extraRoots = []) {
     try {
       const st = statSync(candidatePath);
       if (!st.isFile()) return false;
-      // Fast size pre-check (allow CRLF vs LF difference up to ~10% + 64 bytes)
       const byteLen = Buffer.byteLength(content, 'utf-8');
       if (Math.abs(st.size - byteLen) > Math.max(64, Math.ceil(byteLen * 0.12))) return false;
       const diskText = readFileSync(candidatePath, 'utf-8').replace(/\r\n/g, '\n');
@@ -143,7 +147,6 @@ export function locateDroppedFileOnDisk(filename, content, extraRoots = []) {
     }
   };
 
-  // Pass 1: Direct root check (<root>/<filename>) — catches 90% of project READMEs in <2ms
   for (const r of roots) {
     const direct = join(r, cleanName);
     if (existsSync(direct) && matchesContent(direct)) {
@@ -151,7 +154,6 @@ export function locateDroppedFileOnDisk(filename, content, extraRoots = []) {
     }
   }
 
-  // Pass 2: Bounded BFS up to depth 3 inside known workspaces (capped at 150ms & 800 dirs)
   const deadline = Date.now() + 180;
   let visitedDirs = 0;
   const queue = roots.map((r) => ({ dir: r, depth: 0 }));
@@ -266,6 +268,50 @@ function convertStreamJsonToSteps(events) {
   };
 
   for (const ev of events) {
+    if (ev?.event === 'step_update' && ev.step_update) {
+      const su = ev.step_update;
+      if (su.step_type === 'user_input' && su.state === 'DONE') {
+        flushModel();
+        steps.push({
+          step_index: idx++,
+          source: 'USER_EXPLICIT',
+          type: 'USER_INPUT',
+          status: 'DONE',
+          created_at: new Date().toISOString(),
+          content: su.text_delta || su.message || 'User prompt',
+        });
+      } else if (su.step_type === 'agent_response' && typeof su.text_delta === 'string') {
+        accContent += su.text_delta;
+      } else if (su.step_type === 'tool' && su.state === 'DONE') {
+        flushModel();
+        const tInfo = su.tool_info || {};
+        steps.push({
+          step_index: idx++,
+          source: 'MODEL',
+          type: 'PLANNER_RESPONSE',
+          status: 'DONE',
+          created_at: new Date().toISOString(),
+          tool_calls: [{ name: su.tool_name || tInfo.name || 'tool', args: tInfo.parameters || {} }],
+        });
+        steps.push({
+          step_index: idx++,
+          source: 'MODEL',
+          type: 'GENERIC',
+          status: tInfo.error ? 'ERROR' : 'DONE',
+          created_at: new Date().toISOString(),
+          content: typeof tInfo.output === 'string' ? tInfo.output : JSON.stringify(tInfo.output || ''),
+          error: tInfo.error ? String(tInfo.error.message || tInfo.error) : '',
+        });
+      }
+      continue;
+    }
+    if (ev?.event === 'result' && ev.result) {
+      if (!accContent && typeof ev.result.response === 'string') {
+        accContent = ev.result.response;
+      }
+      continue;
+    }
+
     const t = ev?.type || ev?.event || '';
     if (t === 'user' || t === 'user_message') {
       flushModel();
@@ -374,7 +420,7 @@ const DEFAULT_PERSIST_PATH = join(getDefaultDocsDataDir(), 'docs-store.json');
 const LEGACY_CACHE_PERSIST_PATH = join(homedir(), '.gemini', 'cache', 'agy-markdown-preview', 'docs-store.json');
 
 export class CustomPreviewStore {
-  #items = new Map(); // id -> { id, title, filePath, baseDir, mode, rawText, parsed, updatedAt, sortOrder }
+  #items = new Map();
   #counter = 1;
   #persistPath;
   #clipsDir;
@@ -412,6 +458,34 @@ export class CustomPreviewStore {
     } catch {}
   }
 
+  #buildFileParsed(filePath, rawText, mode, title) {
+    const mediaKind = filePath ? detectMediaDocKind(filePath) : '';
+    if (mediaKind && mediaKind !== 'csv') {
+      let size = 0;
+      try { size = statSync(filePath).size; } catch {}
+      return {
+        mode: 'media',
+        mediaKind,
+        filePath,
+        size,
+        title,
+        view: null,
+      };
+    }
+    if (mediaKind === 'csv') {
+      return {
+        mode: 'csv',
+        mediaKind: 'csv',
+        ext: extname(filePath).toLowerCase(),
+        filePath,
+        title,
+        markdown: rawText || '',
+        view: null,
+      };
+    }
+    return parseRawInput(rawText, mode || 'auto', title || 'Preview');
+  }
+
   #loadFromDisk() {
     if (!this.#persistPath || !existsSync(this.#persistPath)) return;
     try {
@@ -423,23 +497,26 @@ export class CustomPreviewStore {
         for (const saved of raw.items) {
           if (!saved?.id) continue;
           let rawText = saved.rawText || '';
-          if (saved.clipFile && this.#clipsDir) {
+          const mediaKind = saved.filePath ? detectMediaDocKind(saved.filePath) : '';
+          const isBinaryMedia = Boolean(mediaKind && mediaKind !== 'csv');
+
+          if (!isBinaryMedia && saved.clipFile && this.#clipsDir) {
             const clipPath = join(this.#clipsDir, basename(saved.clipFile));
             if (existsSync(clipPath)) {
               try { rawText = readFileSync(clipPath, 'utf-8'); } catch {}
             }
           }
-          if (saved.filePath && existsSync(saved.filePath)) {
+          if (!isBinaryMedia && saved.filePath && existsSync(saved.filePath)) {
             try { rawText = readFileSync(saved.filePath, 'utf-8'); } catch {}
           }
-          const parsed = parseRawInput(rawText, saved.mode || 'auto', saved.title || 'Preview');
+          const parsed = this.#buildFileParsed(saved.filePath || '', rawText, saved.mode || 'auto', saved.title || 'Preview');
           this.#items.set(saved.id, {
             id: saved.id,
             title: saved.title || 'Preview',
             filePath: saved.filePath || '',
             baseDir: saved.baseDir || (saved.filePath ? dirname(saved.filePath) : ''),
             mode: saved.mode || 'auto',
-            rawText,
+            rawText: isBinaryMedia ? '' : rawText,
             parsed,
             updatedAt: saved.updatedAt || Date.now(),
             sortOrder: typeof saved.sortOrder === 'number' ? saved.sortOrder : 0,
@@ -460,7 +537,6 @@ export class CustomPreviewStore {
 
       const serializable = Array.from(this.#items.values()).map((it) => {
         let clipFile = '';
-        // Persist inline clips (or fallback snapshot) into dedicated clips/<id>.txt so docs-store.json stays compact and lossless
         if (!it.filePath && it.rawText && this.#clipsDir) {
           clipFile = `${it.id.replace(/[^a-zA-Z0-9._-]/g, '_')}.txt`;
           try {
@@ -512,7 +588,6 @@ export class CustomPreviewStore {
     const detectedSingleLine = !filePath ? cleanSingleLinePathCandidate(content) : '';
     let effectiveFilePath = filePath || detectedSingleLine;
 
-    // If file was dragged & dropped without browser filePath, locate the exact file on disk!
     if (!effectiveFilePath && droppedFilename && typeof content === 'string' && content.length > 0) {
       const located = locateDroppedFileOnDisk(droppedFilename, content, extraRoots);
       if (located) {
@@ -520,7 +595,15 @@ export class CustomPreviewStore {
       }
     }
 
+    let isBinaryMedia = false;
     if (effectiveFilePath) {
+      if (effectiveFilePath.startsWith('file:///')) {
+        try {
+          let p = decodeURIComponent(new URL(effectiveFilePath).pathname);
+          if (process.platform === 'win32' && /^\/[a-zA-Z]:/.test(p)) p = p.slice(1);
+          effectiveFilePath = p;
+        } catch {}
+      }
       resolvedPath = resolve(effectiveFilePath);
       if (!existsSync(resolvedPath)) {
         throw new Error(`File not found: ${resolvedPath}`);
@@ -533,7 +616,9 @@ export class CustomPreviewStore {
         }
         resolvedPath = readmeCandidate;
       }
-      text = readFileSync(resolvedPath, 'utf-8');
+      const mediaKind = detectMediaDocKind(resolvedPath);
+      isBinaryMedia = Boolean(mediaKind && mediaKind !== 'csv');
+      text = isBinaryMedia ? '' : readFileSync(resolvedPath, 'utf-8');
       if (!displayTitle) displayTitle = basename(resolvedPath);
     }
 
@@ -567,14 +652,14 @@ export class CustomPreviewStore {
       : 1;
 
     const finalTitle = displayTitle || existingEntry?.title || (resolvedPath ? basename(resolvedPath) : `Clip #${this.#counter}`);
-    const parsed = parseRawInput(text || '', mode, finalTitle);
+    const parsed = this.#buildFileParsed(resolvedPath, text || '', mode, finalTitle);
     const entry = {
       id: targetId,
       title: finalTitle,
       filePath: resolvedPath,
       baseDir: resolvedBaseDir,
       mode,
-      rawText: text || '',
+      rawText: isBinaryMedia ? '' : (text || ''),
       parsed,
       updatedAt: Date.now(),
       sortOrder: existingEntry ? existingEntry.sortOrder : minOrder - 1,
@@ -646,8 +731,10 @@ export class CustomPreviewStore {
     try {
       const st = statSync(existing.filePath);
       if (st.mtimeMs <= existing.updatedAt) return existing;
-      const text = readFileSync(existing.filePath, 'utf-8');
-      const parsed = parseRawInput(text, existing.mode, existing.title);
+      const mediaKind = detectMediaDocKind(existing.filePath);
+      const isBinaryMedia = Boolean(mediaKind && mediaKind !== 'csv');
+      const text = isBinaryMedia ? '' : readFileSync(existing.filePath, 'utf-8');
+      const parsed = this.#buildFileParsed(existing.filePath, text, existing.mode, existing.title);
       const updated = {
         ...existing,
         rawText: text,
@@ -681,9 +768,12 @@ export class CustomPreviewStore {
         filePath,
         baseDir,
         mode: parsed?.mode || mode,
+        mediaKind: parsed?.mediaKind || '',
         updatedAt,
         sortOrder: sortOrder ?? 0,
-        excerpt: (parsed?.markdown || rawText || '').slice(0, 1400),
+        excerpt: parsed?.mode === 'media'
+          ? `[${String(parsed.mediaKind || 'media').toUpperCase()}] ${basename(filePath || title)}`
+          : (parsed?.markdown || rawText || '').slice(0, 1400),
       }));
   }
 }

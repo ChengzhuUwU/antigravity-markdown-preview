@@ -2,11 +2,20 @@
 
 All notable changes to **Antigravity Session Preview (`agy-session-preview`)** will be documented in this file.
 
-## [Unreleased]
+## [0.3.0] - 2026-11-25
+
+### Added
+- **Server Password Protection (`server/auth.mjs`)**: Optional password authentication (disabled by default) manageable via `agy-preview password <set | cancel | disable | activate | print>` (or `--set-password` / `--cancel-password` / `--disable-password` / `--activate-password` / `--print-password`) and `/preview password ...`, backed by `0600` persistent config, `HttpOnly` HMAC-signed session cookies, login rate limiting, `--host` binding, and topbar `🔒 Lock`.
+- **Expanded Media & Tabular File Previews (`PDF`, `Video`, `Audio`, `CSV/TSV`)**: Inline PDF viewer (`#page=N`), video/audio players with HTTP `Range` (`206 Partial Content`) byte-range streaming, playback speed (`0.5×–2×`) and loop controls, interactive CSV/TSV table + raw toggle, and inline Markdown `<video>` / `<audio>` embeds.
+- **Custom Two-Color RGB Theme Panel**: Added `Custom RGB` (`自定义 RGB 配色`) to the `Preferences ▾` menu with live `Background` + `Accent` RGB (`0–255`) sliders, `#HEX` input, and native color picker deriving harmonious Light/Dark surface tokens in real time.
+- **Larger & User-Resizable Mermaid Fullscreen Modal**: Expanded `#mermaid-modal` to `97vw × 94vh` by default, added 8-direction edge/corner drag-to-resize handles with `localStorage` size persistence, and added a `⤢ Full Window` (`100%`) toggle.
+
+### Fixed
+- **Windows Sidebar `📂 Folder` (`📂 目录`) & Native File Picker**: Fixed path quoting, plain-directory resolution (folders without `README.md`), and foreground window activation when opening File Explorer from the background server, plus TopMost file-picker focus and narrow-screen (`<=860px`) Outline drawer visibility.
 
 ### Changed
 - **Renamed Plugin ID & Display Name to Session Preview (`agy-session-preview`)**: Aligned plugin manifest (`plugin.json`), Sidecar UI (`sidecar://agy-session-preview/preview/`), frontend title & EN/ZH branding (`Session Preview` / `会话预览器`), hooks (`session-preview-sync`), package metadata (`antigravity-session-preview`), and docs with the renamed GitHub repository while keeping the `agy-preview` CLI command and `/preview` slash command intact.
-- **Automatic Legacy Data & Install Migration**: Automatically copies existing `docs-store.json`, `clips/`, and `btw-notes.json` from `%APPDATA%/agy-markdown-preview` (and macOS/Linux equivalents) into `agy-session-preview` on startup, and removes legacy `~/.gemini/config/plugins/agy-markdown-preview` during `npm run install-plugin`.
+- **Automatic Legacy Data & Install Migration**: Automatically copies existing `docs-store.json`, `clips/`, `btw-notes.json`, and `auth-config.json` from `%APPDATA%/agy-markdown-preview` (and macOS/Linux equivalents) into `agy-session-preview` on startup, and removes legacy `~/.gemini/config/plugins/agy-markdown-preview` during `npm run install-plugin`.
 
 ## [0.2.1] - 2026-11-24
 

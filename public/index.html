@@ -61,7 +61,7 @@
         </div>
 
         <div class="topbar-right">
-          <!-- Unified Persistent Preferences Dropdown (placed to the LEFT of Sync) -->
+          <!-- Unified Persistent Preferences Dropdown (placed immediately to the LEFT of Sync) -->
           <div id="prefs-dropdown-wrap" class="theme-dropdown-wrap">
             <button id="prefs-btn" class="pill-btn" type="button" data-i18n-title="prefsTip" title="Appearance, Typography &amp; Language Preferences">
               <span id="prefs-btn-swatch" class="theme-swatch-dot"></span>
@@ -86,6 +86,7 @@
             </button>
             <div id="tools-menu" class="theme-menu hidden" style="width:240px;" role="menu"></div>
           </div>
+          <button id="lock-session-btn" class="pill-btn hidden" type="button" data-i18n="lockSessionBtn" data-i18n-title="lockSessionTip" title="Lock preview session">🔒 Lock</button>
           <button id="export-btn" class="pill-btn primary" data-i18n="exportBtn" data-i18n-title="exportTip" title="Export clean Markdown">Export .md</button>
           <button id="toc-toggle-btn" class="pill-btn active" data-i18n="outlineBtn" data-i18n-title="outlineTip" title="Toggle Outline (O)">Outline</button>
         </div>
@@ -107,7 +108,7 @@
           <div id="reader-column" class="reader-column">
             <div class="empty-state">
               <strong data-i18n="readyTitle">Session Preview Ready</strong>
-              <span data-i18n-html="readyHint">Run <code>agy-preview</code>, select a session on the left, or open/drop any <code>.md</code> / <code>.jsonl</code> file.</span>
+              <span data-i18n-html="readyHint">Run <code>agy-preview</code>, select a session on the left, or open/drop any <code>.md</code> / <code>.pdf</code> / <code>.mp4</code> / <code>.jsonl</code> file.</span>
             </div>
           </div>
         </div>
@@ -181,9 +182,9 @@
       </div>
       <div class="modal-body">
         <div style="display:flex;flex-direction:column;gap:4px;">
-          <label style="font-size:0.75rem;color:var(--text-muted);font-weight:550;" data-i18n="pastePathLabel">Local File Path or Base Folder (resolves relative links &amp; images cleanly)</label>
+          <label style="font-size:0.75rem;color:var(--text-muted);font-weight:550;" data-i18n="pastePathLabel">Local File Path or Base Folder (supports .md, .pdf, video, audio, images, .csv, .jsonl)</label>
           <div style="display:flex;gap:6px;">
-            <input id="paste-filepath-input" class="input-sm" type="text" placeholder="e.g. E:\Projects\repo\README.md  or  /workspace/repo">
+            <input id="paste-filepath-input" class="input-sm" type="text" placeholder="e.g. E:\Projects\repo\README.md  or  paper.pdf">
             <button id="paste-browse-btn" class="pill-btn" type="button" data-i18n="browseBtn">📂 Browse…</button>
           </div>
         </div>
@@ -211,19 +212,28 @@
     </div>
   </div>
 
-  <!-- Fullscreen Mermaid Interactive Canvas Modal -->
-  <div id="mermaid-modal" class="modal-backdrop hidden">
-    <div class="modal-panel mermaid-fullscreen-panel">
+  <!-- Larger & User-Resizable Fullscreen Mermaid Interactive Canvas Modal -->
+  <div id="mermaid-modal" class="modal-backdrop mermaid-modal-backdrop hidden">
+    <div id="mermaid-modal-panel" class="modal-panel mermaid-fullscreen-panel">
+      <div class="mmd-resize-handle mmd-resize-n" data-mmd-resize="n"></div>
+      <div class="mmd-resize-handle mmd-resize-s" data-mmd-resize="s"></div>
+      <div class="mmd-resize-handle mmd-resize-e" data-mmd-resize="e"></div>
+      <div class="mmd-resize-handle mmd-resize-w" data-mmd-resize="w"></div>
+      <div class="mmd-resize-handle mmd-resize-nw" data-mmd-resize="nw"></div>
+      <div class="mmd-resize-handle mmd-resize-ne" data-mmd-resize="ne"></div>
+      <div class="mmd-resize-handle mmd-resize-sw" data-mmd-resize="sw"></div>
+      <div class="mmd-resize-handle mmd-resize-se" data-mmd-resize="se" data-i18n-title="mmdResizeTip" title="Drag to resize modal · Double-click to reset size"></div>
       <div class="modal-header">
-        <div style="display:flex;align-items:center;gap:10px;">
-          <strong style="font-size:0.86rem;" data-i18n="mmdModalTitle">Mermaid Diagram · ELK Orthogonal View</strong>
-          <span style="font-size:0.73rem;color:var(--text-faint);" data-i18n="mmdModalHint">Scroll wheel to zoom · Drag with left mouse button to pan</span>
+        <div style="display:flex;align-items:center;gap:10px;min-width:0;flex:1;">
+          <strong style="font-size:0.86rem;flex-shrink:0;" data-i18n="mmdModalTitle">Mermaid Diagram · ELK Orthogonal View</strong>
+          <span style="font-size:0.73rem;color:var(--text-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" data-i18n="mmdModalHint">Wheel to zoom · Drag canvas to pan · Drag window edges/corners to resize</span>
         </div>
         <div class="side-preview-actions">
           <button id="mmd-modal-zoom-out" class="code-mini-btn" type="button" data-i18n-title="mmdZoomOutTip" title="Zoom Out">−</button>
           <button id="mmd-modal-zoom-reset" class="code-mini-btn" type="button" data-i18n-title="mmdZoomResetTip" title="Reset Zoom">100%</button>
           <button id="mmd-modal-zoom-fit" class="code-mini-btn" type="button" data-i18n="mmdFitBtn" data-i18n-title="mmdFitTip" title="Fit entire diagram to window">⊡ Fit Screen</button>
           <button id="mmd-modal-zoom-in" class="code-mini-btn" type="button" data-i18n-title="mmdZoomInTip" title="Zoom In">+</button>
+          <button id="mmd-modal-maximize" class="code-mini-btn" type="button" data-i18n="mmdMaximizeBtn" data-i18n-title="mmdMaximizeTip" title="Toggle 100% full window">⤢ Full Window</button>
           <button id="mmd-modal-download" class="code-mini-btn" type="button" data-i18n="mmdDownloadBtn" data-i18n-title="mmdDownloadTip" title="Download vector SVG">⬇ SVG</button>
           <button id="mmd-modal-close" class="icon-btn sm" type="button" title="Close (Esc)">✕</button>
         </div>
@@ -233,6 +243,26 @@
       </div>
     </div>
   </div>
+
+  <!-- Password Authentication Lock Overlay -->
+  <div id="auth-lock-overlay" class="auth-lock-overlay hidden">
+    <form id="auth-lock-form" class="auth-lock-card" autocomplete="on">
+      <div class="brand-mark" style="justify-content:center;font-size:1rem;">
+        <span class="brand-dot">🔒</span>
+        <span data-i18n="lockTitle">Preview Password Required</span>
+      </div>
+      <p class="auth-lock-hint" data-i18n="lockHint">This Antigravity Session Preview server is protected by a password.</p>
+      <div id="auth-lock-error" class="notice-banner error hidden"></div>
+      <div class="auth-input-wrap">
+        <input id="auth-password-input" class="input-sm auth-password-input" type="password" autocomplete="current-password" data-i18n-placeholder="lockPlaceholder" placeholder="Enter access password…">
+        <button id="auth-toggle-vis-btn" class="icon-btn sm" type="button" data-i18n-title="showPwdTip" title="Show / hide password">👁</button>
+      </div>
+      <button id="auth-submit-btn" class="pill-btn primary auth-submit-btn" type="submit" data-i18n="unlockBtn">Unlock Preview</button>
+    </form>
+  </div>
+
+  <!-- Non-blocking Toast Feedback -->
+  <div id="app-toast" class="app-toast hidden"></div>
 
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/highlight.min.js"></script>

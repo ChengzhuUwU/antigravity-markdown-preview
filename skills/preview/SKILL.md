@@ -1,20 +1,46 @@
 ---
 name: preview
-description: Open the lightweight editorial Session Preview window (or side pane) for the active Antigravity CLI/Desktop conversation, a Markdown file, or CLI output. Use whenever the user invokes /preview or asks to preview CLI output or markdown cleanly.
+description: Open the lightweight editorial Session Preview window (or side pane) for the active Antigravity CLI/Desktop conversation, a Markdown/PDF/media file, or CLI output, or manage the Preview frontend password (set, cancel/clear, disable, activate, print). Use whenever the user invokes /preview or asks to preview CLI output/files or configure preview password protection.
 ---
 
 # Session Preview (`/preview`)
 
-Open a lightweight, real-time standalone Session & Markdown preview window where thinking chains and tool calls are collapsed by default, featuring 2×8 customizable Light/Dark color themes, KaTeX math, lazy Mermaid diagrams, Obsidian/GitHub callouts, and instant SSE synchronization.
+Open a lightweight, real-time standalone Session, Markdown & Media preview window where thinking chains and tool calls are collapsed by default, featuring customizable Light/Dark color themes + custom RGB panel, inline PDF/video/audio/CSV previews, KaTeX math, Mermaid v12 ELK diagrams, and optional frontend password protection for remote servers.
 
 ## Step 1: Locate the Launcher Script
 
 Resolve `bin/agy-preview.mjs` from the installed plugin directory (or workspace copy if developing locally):
 
 - Installed location: `~/.gemini/config/plugins/agy-session-preview/bin/agy-preview.mjs`
+- Legacy fallback: `~/.gemini/config/plugins/agy-markdown-preview/bin/agy-preview.mjs`
 - Workspace fallback: `./bin/agy-preview.mjs`
 
-## Step 2: Launch or Focus the Standalone Window
+## Step 2: Handle Password Security Subcommands (If Requested)
+
+If the user invokes `/preview password ...` (or asks in natural language to **set / cancel / deactivate / activate / print** the preview frontend password), run `bin/agy-preview.mjs` synchronously (`IsDaemon: false`, `WaitMsBeforeAsync: 5000`):
+
+- **Set & activate password** (`/preview password set <PASSWORD>`):
+  ```powershell
+  $launcher = "$HOME\.gemini\config\plugins\agy-session-preview\bin\agy-preview.mjs"; if (!(Test-Path $launcher)) { $launcher = "$HOME\.gemini\config\plugins\agy-markdown-preview\bin\agy-preview.mjs" }; if (!(Test-Path $launcher)) { $launcher = ".\bin\agy-preview.mjs" }; node $launcher password set "<PASSWORD>"
+  ```
+- **Cancel / clear password** (`/preview password cancel` or `clear`):
+  ```powershell
+  $launcher = "$HOME\.gemini\config\plugins\agy-session-preview\bin\agy-preview.mjs"; if (!(Test-Path $launcher)) { $launcher = "$HOME\.gemini\config\plugins\agy-markdown-preview\bin\agy-preview.mjs" }; if (!(Test-Path $launcher)) { $launcher = ".\bin\agy-preview.mjs" }; node $launcher password cancel
+  ```
+- **Temporarily deactivate password check** (`/preview password disable` or `off`, keeps saved password):
+  ```powershell
+  $launcher = "$HOME\.gemini\config\plugins\agy-session-preview\bin\agy-preview.mjs"; if (!(Test-Path $launcher)) { $launcher = "$HOME\.gemini\config\plugins\agy-markdown-preview\bin\agy-preview.mjs" }; if (!(Test-Path $launcher)) { $launcher = ".\bin\agy-preview.mjs" }; node $launcher password disable
+  ```
+- **Activate password protection** (`/preview password activate [OPTIONAL_PASSWORD]` — re-enables saved password or generates a random one if unset):
+  ```powershell
+  $launcher = "$HOME\.gemini\config\plugins\agy-session-preview\bin\agy-preview.mjs"; if (!(Test-Path $launcher)) { $launcher = "$HOME\.gemini\config\plugins\agy-markdown-preview\bin\agy-preview.mjs" }; if (!(Test-Path $launcher)) { $launcher = ".\bin\agy-preview.mjs" }; node $launcher password activate
+  ```
+- **Print current password & status** (`/preview password print` or `show`):
+  ```powershell
+  $launcher = "$HOME\.gemini\config\plugins\agy-session-preview\bin\agy-preview.mjs"; if (!(Test-Path $launcher)) { $launcher = "$HOME\.gemini\config\plugins\agy-markdown-preview\bin\agy-preview.mjs" }; if (!(Test-Path $launcher)) { $launcher = ".\bin\agy-preview.mjs" }; node $launcher password print
+  ```
+
+## Step 3: Launch or Focus the Standalone Window
 
 > [!IMPORTANT]
 > Antigravity's `run_command` terminates non-daemon subprocess trees (Windows Job Objects / process groups) when a tool call finishes. Therefore, **you MUST set `IsDaemon: true` and `WaitMsBeforeAsync: 3000`** with `--foreground` so the local HTTP + SSE preview server stays alive in the background across turns! (If a preview server is already running on port `19420`, `--foreground` automatically reuses it, focuses/opens the window, and exits cleanly.)
@@ -33,7 +59,7 @@ Call `run_command` with **`IsDaemon: true`** and **`WaitMsBeforeAsync: 3000`**, 
   LAUNCHER="$HOME/.gemini/config/plugins/agy-session-preview/bin/agy-preview.mjs"; [ -f "$LAUNCHER" ] || LAUNCHER="$HOME/.gemini/config/plugins/agy-markdown-preview/bin/agy-preview.mjs"; [ -f "$LAUNCHER" ] || LAUNCHER="./bin/agy-preview.mjs"; node "$LAUNCHER" --foreground --conv "<CONVERSATION_ID>" --open
   ```
 
-### Case B — User specified a Markdown / JSONL / text file (`/preview path/to/file.md`)
+### Case B — User specified a Markdown / PDF / Video / JSONL / text file (`/preview path/to/file`)
 
 Call `run_command` with **`IsDaemon: true`** and **`WaitMsBeforeAsync: 3000`**, passing `--foreground --file "<FILE_PATH>" --open`:
 
@@ -41,7 +67,7 @@ Call `run_command` with **`IsDaemon: true`** and **`WaitMsBeforeAsync: 3000`**, 
 $launcher = "$HOME\.gemini\config\plugins\agy-session-preview\bin\agy-preview.mjs"; if (!(Test-Path $launcher)) { $launcher = "$HOME\.gemini\config\plugins\agy-markdown-preview\bin\agy-preview.mjs" }; if (!(Test-Path $launcher)) { $launcher = ".\bin\agy-preview.mjs" }; node $launcher --foreground --file "<FILE_PATH>" --open
 ```
 
-## Step 3: Respond Concisely
+## Step 4: Respond Concisely
 
 Return the preview URL printed by the launcher (`http://127.0.0.1:19420/...`), mention key shortcuts (`R` sync, `T` theme, `O` outline, `P` open/paste Markdown), and if running inside Antigravity 2.0 Desktop, also provide the side-pane link:
 

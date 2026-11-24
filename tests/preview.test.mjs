@@ -17,8 +17,10 @@ import {
   parseRawInput,
   stripAnsi,
 } from '../server/custom-preview.mjs';
-import { resolveSafeFilePath, startStandaloneServer } from '../server/app.mjs';
-import { classifyHref, isCodeFilePath, isPreviewableFilePath } from '../public/js/markdown.js';
+import { PreviewAuthManager } from '../server/auth.mjs';
+import { classifyFile, resolveSafeFilePath, startStandaloneServer } from '../server/app.mjs';
+import { classifyHref, isCodeFilePath, isPreviewableFilePath, renderMarkdownHtml } from '../public/js/markdown.js';
+import { execFileSync } from 'node:child_process';
 
 test('unquoteToolArg and normalizeToolArgs handle JSON-quoted and plain strings', () => {
   assert.equal(unquoteToolArg('"C:\\\\Users\\\\foo.txt"'), 'C:\\Users\\foo.txt');
@@ -103,6 +105,10 @@ test('classifyHref and isCodeFilePath identify relative docs, Python files, conv
   assert.equal(relDoc.isCode, false);
   assert.equal(relDoc.isPreviewable, true);
   assert.equal(isPreviewableFilePath('assets/diagram.png'), true);
+  assert.equal(isPreviewableFilePath('docs/paper.pdf'), true);
+  assert.equal(isPreviewableFilePath('rollouts/episode_01.mp4'), true);
+  assert.equal(isPreviewableFilePath('audio/narration.mp3'), true);
+  assert.equal(isPreviewableFilePath('metrics/ablation.csv'), true);
   assert.equal(isPreviewableFilePath('isaacgymenvs'), true);
   assert.equal(isPreviewableFilePath('weights/model.pt'), false);
   assert.equal(isPreviewableFilePath('archive/bundle.zip'), false);
@@ -260,7 +266,11 @@ test('Standalone server serves file-info, raw-file images, SSE hook stream, and 
   writeFileSync(join(tmp, 'demo.py'), 'x = 1\ny = 2\n');
   writeFileSync(join(tmp, 'icon.svg'), '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"></svg>');
 
-  const { server, port, engine } = await startStandaloneServer({ port: 0, storePersistPath: join(tmp, 'docs-store.json') });
+  const { server, port, engine } = await startStandaloneServer({
+    port: 0,
+    storePersistPath: join(tmp, 'docs-store.json'),
+    authPersistPath: join(tmp, 'auth-config.json'),
+  });
   try {
     // Test Docs/Clips HTTP management routes (POST, PATCH, reorder, DELETE)
     const createRes = await fetch(`http://127.0.0.1:${port}/api/previews`, {
@@ -403,5 +413,173 @@ test('migrateLegacyDataDirIfNeeded copies legacy agy-markdown-preview docs, clip
     assert.match(readFileSync(join(targetDir, 'btw-notes.json'), 'utf-8'), /btw-2/);
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('PreviewAuthManager & CLI password subcommands support set, print, disable, activate, cancel, and HTTP session cookies', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'amp-auth-'));
+  const authPath = join(tmp, 'auth-config.json');
+  const storePath = join(tmp, 'docs-store.json');
+
+  const cliEntry = join(process.cwd(), 'bin', 'agy-preview.mjs');
+  const runCli = (args) => JSON.parse(execFileSync(process.execPath, [cliEntry, ...args], {
+    env: { ...process.env, AGY_PREVIEW_DATA_DIR: tmp },
+    encoding: 'utf-8',
+  }));
+
+  const initialPrint = runCli(['password', 'print']);
+  assert.equal(initialPrint.authRequired, false);
+  assert.equal(initialPrint.password, '(none)');
+
+  const afterSet = runCli(['--set-password', 'MyServerPass#42']);
+  assert.equal(afterSet.enabled, true);
+  assert.equal(afterSet.authRequired, true);
+
+  const printed = runCli(['--print-password']);
+  assert.equal(printed.password, 'MyServerPass#42');
+  assert.equal(printed.authRequired, true);
+
+  const afterDisable = runCli(['password', 'disable']);
+  assert.equal(afterDisable.enabled, false);
+  assert.equal(afterDisable.hasPassword, true);
+  assert.equal(afterDisable.authRequired, false);
+
+  const afterActivate = runCli(['password', 'activate']);
+  assert.equal(afterActivate.enabled, true);
+  assert.equal(afterActivate.authRequired, true);
+  assert.equal(afterActivate.password, 'MyServerPass#42');
+
+  const afterCancel = runCli(['password', 'cancel']);
+  assert.equal(afterCancel.enabled, false);
+  assert.equal(afterCancel.hasPassword, false);
+  assert.equal(afterCancel.authRequired, false);
+
+  const autoGen = runCli(['--activate-password']);
+  assert.equal(autoGen.generated, true);
+  assert.equal(autoGen.password.length, 12);
+
+  const authMgr = new PreviewAuthManager({ persistPath: authPath });
+  authMgr.setPassword('TopSecret99');
+
+  const { server, port, engine } = await startStandaloneServer({
+    port: 0,
+    storePersistPath: storePath,
+    authPersistPath: authPath,
+  });
+
+  try {
+    const indexRes = await fetch(`http://127.0.0.1:${port}/`);
+    assert.equal(indexRes.status, 200);
+    const statusRes = await fetch(`http://127.0.0.1:${port}/api/auth/status`);
+    const statusJson = await statusRes.json();
+    assert.equal(statusJson.authRequired, true);
+    assert.equal(statusJson.authenticated, false);
+    assert.equal('password' in statusJson, false);
+
+    const unauthRes = await fetch(`http://127.0.0.1:${port}/api/previews`);
+    assert.equal(unauthRes.status, 401);
+
+    const cliBypassRes = await fetch(`http://127.0.0.1:${port}/api/previews`, {
+      headers: { 'X-Preview-Cli-Token': engine.authManager.getCliToken() },
+    });
+    assert.equal(cliBypassRes.status, 200);
+
+    const badLogin = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: 'wrong' }),
+    });
+    assert.equal(badLogin.status, 401);
+
+    const okLogin = await fetch(`http://127.0.0.1:${port}/api/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: 'TopSecret99' }),
+    });
+    assert.equal(okLogin.status, 200);
+    const cookieHeader = (okLogin.headers.get('set-cookie') || '').split(';')[0];
+    assert.match(cookieHeader, /^amp_session=/);
+
+    const authedRes = await fetch(`http://127.0.0.1:${port}/api/previews`, {
+      headers: { Cookie: cookieHeader },
+    });
+    assert.equal(authedRes.status, 200);
+  } finally {
+    engine.close();
+    await new Promise((r) => server.close(r));
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('Rich media previews (PDF, Video HTTP Range 206, Audio, CSV) and directory reveal work end-to-end', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'amp-media-'));
+  const subFolderNoReadme = join(tmp, 'plain-dir');
+  mkdirSync(subFolderNoReadme, { recursive: true });
+  writeFileSync(join(tmp, 'paper.pdf'), Buffer.from('%PDF-1.7\nfake-pdf-payload'));
+  writeFileSync(join(tmp, 'rollout.mp4'), Buffer.from('0123456789ABCDEF'));
+  writeFileSync(join(tmp, 'clip.mp3'), Buffer.from('ID3-audio-bytes'));
+  writeFileSync(join(tmp, 'bench.csv'), 'model,score\n"Gemini 4",99.2\n');
+
+  assert.equal(classifyFile('paper.pdf').kind, 'pdf');
+  assert.equal(classifyFile('rollout.mp4').kind, 'video');
+  assert.equal(classifyFile('clip.mp3').kind, 'audio');
+  assert.equal(classifyFile('bench.csv').kind, 'csv');
+
+  const { Marked } = await import('marked');
+  globalThis.window = { marked: { Marked } };
+  const mdHtml = renderMarkdownHtml('![demo](rollout.mp4)\n\n![voice](clip.mp3)', { baseDir: tmp });
+  delete globalThis.window;
+  assert.match(mdHtml, /<video\b[^>]*class="md-video"/);
+  assert.match(mdHtml, /<audio\b[^>]*class="md-audio"/);
+
+  const { server, port, engine } = await startStandaloneServer({
+    port: 0,
+    storePersistPath: join(tmp, 'docs-store.json'),
+    authPersistPath: join(tmp, 'auth-config.json'),
+  });
+
+  try {
+    const pdfInfo = await (await fetch(`http://127.0.0.1:${port}/api/file-info?path=paper.pdf%23page=3&base=${encodeURIComponent(tmp)}`)).json();
+    assert.equal(pdfInfo.kind, 'pdf');
+    assert.equal(pdfInfo.hash, 'page=3');
+    assert.equal(pdfInfo.content, undefined);
+
+    const pdfDocRes = await fetch(`http://127.0.0.1:${port}/api/previews`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filePath: join(tmp, 'paper.pdf') }),
+    });
+    assert.equal(pdfDocRes.status, 200);
+    const pdfDoc = await pdfDocRes.json();
+    assert.equal(pdfDoc.parsed.mode, 'media');
+    assert.equal(pdfDoc.parsed.mediaKind, 'pdf');
+    assert.equal(pdfDoc.rawText, '');
+
+    const rangeRes = await fetch(`http://127.0.0.1:${port}/api/raw-file?path=rollout.mp4&base=${encodeURIComponent(tmp)}`, {
+      headers: { Range: 'bytes=4-9' },
+    });
+    assert.equal(rangeRes.status, 206);
+    assert.equal(rangeRes.headers.get('content-range'), 'bytes 4-9/16');
+    assert.equal(rangeRes.headers.get('accept-ranges'), 'bytes');
+    assert.equal(await rangeRes.text(), '456789');
+
+    const badRangeRes = await fetch(`http://127.0.0.1:${port}/api/raw-file?path=rollout.mp4&base=${encodeURIComponent(tmp)}`, {
+      headers: { Range: 'bytes=100-200' },
+    });
+    assert.equal(badRangeRes.status, 416);
+
+    const dirReveal = await fetch(`http://127.0.0.1:${port}/api/reveal-in-folder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: subFolderNoReadme, dryRun: true }),
+    });
+    assert.equal(dirReveal.status, 200);
+    const dirRevealJson = await dirReveal.json();
+    assert.equal(dirRevealJson.isDirectory, true);
+    assert.equal(dirRevealJson.folder, subFolderNoReadme);
+  } finally {
+    engine.close();
+    await new Promise((r) => server.close(r));
+    rmSync(tmp, { recursive: true, force: true });
   }
 });

@@ -64,8 +64,12 @@ writeFileSync(shPath, shShim, 'utf-8');
 try { chmodSync(shPath, 0o755); } catch {}
 
 if (existsSync(LEGACY_TARGET)) {
-  rmSync(LEGACY_TARGET, { recursive: true, force: true });
-  console.log(`[install-plugin] Removed legacy plugin directory ${LEGACY_TARGET}`);
+  try {
+    rmSync(LEGACY_TARGET, { recursive: true, force: true, maxRetries: 4, retryDelay: 150 });
+    console.log(`[install-plugin] Removed legacy plugin directory ${LEGACY_TARGET}`);
+  } catch (err) {
+    console.warn(`[install-plugin] Could not fully remove legacy directory (${err.code || err.message}); close active sidecars and re-run if needed.`);
+  }
 }
 
 console.log(`[install-plugin] Installed agy-session-preview to ${TARGET}`);

@@ -12,7 +12,6 @@ import {
 import { TranscriptRenderer, formatCompactTokens, renderCliInsightsHtml } from './transcript-view.js';
 
 const isSidecar = Boolean(window.sidecar && typeof window.sidecar.fetch === 'function');
-const apiFetch = (url, opts) => (isSidecar ? window.sidecar.fetch(url, opts) : fetch(url, opts));
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
 const CHEVRON_SVG = `<svg class="chevron-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5L10.5 8 6 12.5"/></svg>`;
 
@@ -27,6 +26,130 @@ const THEME_PALETTES = [
   { id: 'slate', lightBg: '#f8f9fa', darkBg: '#121316', accent: '#475569' },
 ];
 
+const DEFAULT_CUSTOM_COLORS = {
+  lightBg: '#f5f7fc',
+  darkBg: '#131722',
+  accent: '#3b6df6',
+  activeSlot: 'bg', // 'bg' | 'accent'
+};
+
+function isValidHex(str) {
+  return typeof str === 'string' && /^#[0-9a-fA-F]{6}$/.test(str.trim());
+}
+
+function loadCustomColors() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('amp-custom-rgb') || '{}');
+    return {
+      lightBg: isValidHex(raw.lightBg) ? raw.lightBg : DEFAULT_CUSTOM_COLORS.lightBg,
+      darkBg: isValidHex(raw.darkBg) ? raw.darkBg : DEFAULT_CUSTOM_COLORS.darkBg,
+      accent: isValidHex(raw.accent) ? raw.accent : DEFAULT_CUSTOM_COLORS.accent,
+      activeSlot: raw.activeSlot === 'accent' ? 'accent' : 'bg',
+    };
+  } catch {
+    return { ...DEFAULT_CUSTOM_COLORS };
+  }
+}
+
+function clampByte(n) {
+  const v = Math.round(Number(n) || 0);
+  return Math.max(0, Math.min(255, v));
+}
+
+function hexToRgb(hex) {
+  const clean = String(hex || '').replace('#', '').trim();
+  if (clean.length === 3) {
+    return {
+      r: parseInt(clean[0] + clean[0], 16) || 0,
+      g: parseInt(clean[1] + clean[1], 16) || 0,
+      b: parseInt(clean[2] + clean[2], 16) || 0,
+    };
+  }
+  return {
+    r: parseInt(clean.slice(0, 2), 16) || 0,
+    g: parseInt(clean.slice(2, 4), 16) || 0,
+    b: parseInt(clean.slice(4, 6), 16) || 0,
+  };
+}
+
+function rgbToHex(r, g, b) {
+  const to2 = (v) => clampByte(v).toString(16).padStart(2, '0');
+  return `#${to2(r)}${to2(g)}${to2(b)}`;
+}
+
+function mixRgb(c1, c2, ratioC2) {
+  const w = Math.max(0, Math.min(1, ratioC2));
+  return {
+    r: clampByte(c1.r * (1 - w) + c2.r * w),
+    g: clampByte(c1.g * (1 - w) + c2.g * w),
+    b: clampByte(c1.b * (1 - w) + c2.b * w),
+  };
+}
+
+function rgbLuminance({ r, g, b }) {
+  return (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+}
+
+const CUSTOM_CSS_PROPS = [
+  '--bg-canvas', '--bg-sidebar', '--bg-surface', '--bg-subtle', '--bg-hover',
+  '--bg-code', '--bg-code-header', '--border', '--border-strong',
+  '--text-main', '--text-muted', '--text-faint', '--accent', '--accent-hover',
+];
+
+function clearCustomPaletteCssVars() {
+  const rootStyle = document.documentElement.style;
+  for (const prop of CUSTOM_CSS_PROPS) {
+    rootStyle.removeProperty(prop);
+  }
+}
+
+function applyCustomPaletteCssVars(bgHex, accentHex) {
+  const bg = hexToRgb(bgHex);
+  const acc = hexToRgb(accentHex);
+  const lum = rgbLuminance(bg);
+  const isDarkSurface = lum < 0.46;
+  const white = { r: 255, g: 255, b: 255 };
+  const black = { r: 16, g: 18, b: 22 };
+  const rootStyle = document.documentElement.style;
+
+  if (!isDarkSurface) {
+    const tintedDark = mixRgb({ r: 28, g: 30, b: 36 }, acc, 0.08);
+    const shadeTarget = mixRgb(black, acc, 0.14);
+    rootStyle.setProperty('--bg-canvas', rgbToHex(bg.r, bg.g, bg.b));
+    rootStyle.setProperty('--bg-surface', rgbToHex(...Object.values(mixRgb(bg, white, 0.72))));
+    rootStyle.setProperty('--bg-sidebar', rgbToHex(...Object.values(mixRgb(bg, shadeTarget, 0.045))));
+    rootStyle.setProperty('--bg-subtle', rgbToHex(...Object.values(mixRgb(bg, shadeTarget, 0.075))));
+    rootStyle.setProperty('--bg-hover', rgbToHex(...Object.values(mixRgb(bg, shadeTarget, 0.12))));
+    rootStyle.setProperty('--bg-code', rgbToHex(...Object.values(mixRgb(bg, shadeTarget, 0.035))));
+    rootStyle.setProperty('--bg-code-header', rgbToHex(...Object.values(mixRgb(bg, shadeTarget, 0.08))));
+    rootStyle.setProperty('--border', rgbToHex(...Object.values(mixRgb(bg, shadeTarget, 0.13))));
+    rootStyle.setProperty('--border-strong', rgbToHex(...Object.values(mixRgb(bg, shadeTarget, 0.22))));
+    rootStyle.setProperty('--text-main', rgbToHex(tintedDark.r, tintedDark.g, tintedDark.b));
+    rootStyle.setProperty('--text-muted', rgbToHex(...Object.values(mixRgb(tintedDark, bg, 0.34))));
+    rootStyle.setProperty('--text-faint', rgbToHex(...Object.values(mixRgb(tintedDark, bg, 0.56))));
+    rootStyle.setProperty('--accent', rgbToHex(acc.r, acc.g, acc.b));
+    rootStyle.setProperty('--accent-hover', rgbToHex(...Object.values(mixRgb(acc, black, 0.14))));
+  } else {
+    const crispLight = mixRgb({ r: 240, g: 242, b: 246 }, acc, 0.06);
+    const liftTarget = mixRgb(white, acc, 0.12);
+    rootStyle.setProperty('--bg-canvas', rgbToHex(bg.r, bg.g, bg.b));
+    rootStyle.setProperty('--bg-sidebar', rgbToHex(...Object.values(mixRgb(bg, liftTarget, 0.045))));
+    rootStyle.setProperty('--bg-surface', rgbToHex(...Object.values(mixRgb(bg, liftTarget, 0.08))));
+    rootStyle.setProperty('--bg-subtle', rgbToHex(...Object.values(mixRgb(bg, liftTarget, 0.115))));
+    rootStyle.setProperty('--bg-hover', rgbToHex(...Object.values(mixRgb(bg, liftTarget, 0.165))));
+    rootStyle.setProperty('--bg-code', rgbToHex(...Object.values(mixRgb(bg, liftTarget, 0.03))));
+    rootStyle.setProperty('--bg-code-header', rgbToHex(...Object.values(mixRgb(bg, liftTarget, 0.065))));
+    rootStyle.setProperty('--border', rgbToHex(...Object.values(mixRgb(bg, liftTarget, 0.13))));
+    rootStyle.setProperty('--border-strong', rgbToHex(...Object.values(mixRgb(bg, liftTarget, 0.22))));
+    rootStyle.setProperty('--text-main', rgbToHex(crispLight.r, crispLight.g, crispLight.b));
+    rootStyle.setProperty('--text-muted', rgbToHex(...Object.values(mixRgb(crispLight, bg, 0.32))));
+    rootStyle.setProperty('--text-faint', rgbToHex(...Object.values(mixRgb(crispLight, bg, 0.54))));
+    rootStyle.setProperty('--accent', rgbToHex(acc.r, acc.g, acc.b));
+    rootStyle.setProperty('--accent-hover', rgbToHex(...Object.values(mixRgb(acc, white, 0.16))));
+  }
+  return isDarkSurface ? 'dark' : 'light';
+}
+
 function initialThemeMode() {
   const saved = localStorage.getItem('amp-theme');
   if (saved === 'dark' || saved === 'light') return saved;
@@ -36,8 +159,9 @@ function initialThemeMode() {
 const state = {
   mode: 'sessions', // 'sessions' | 'docs'
   flavor: localStorage.getItem('amp-flavor') || 'antigravity-cli',
-  theme: initialThemeMode(), // 'light' | 'dark' (2 brightness modes)
-  palette: localStorage.getItem('amp-palette') || 'parchment', // 8 color palettes
+  theme: initialThemeMode(), // 'light' | 'dark'
+  palette: localStorage.getItem('amp-palette') || 'parchment', // 8 presets | 'custom'
+  customColors: loadCustomColors(),
   width: localStorage.getItem('amp-width') || 'normal',
   tables: localStorage.getItem('amp-tables') || 'compact',
   prose: localStorage.getItem('amp-prose') || 'sans',
@@ -48,9 +172,9 @@ const state = {
   docsStoragePath: '',
   conversations: [],
   customPreviews: [],
-  projectExpanded: new Map(), // projectKey -> bool
-  showOlderInProject: new Set(), // projectKey
-  expandedSubagentGroups: new Set(), // parentConvId or projectKey:subagents
+  projectExpanded: new Map(),
+  showOlderInProject: new Set(),
+  expandedSubagentGroups: new Set(),
   docsManageMode: false,
   renamingDocId: null,
   dragDocId: null,
@@ -59,26 +183,113 @@ const state = {
   eventSource: null,
   findHits: [],
   findIndex: -1,
-  // Side Preview Pane history stack
   sideHistory: [],
   sideHistoryIdx: -1,
   sideCurrent: null,
-  // Popup File Preview Modal state
   popupCurrent: null,
-  // Topbar CLI Tools Inspector tab ('btw' | 'context' | 'usage' | null)
   activeCliToolTab: null,
+  authRequired: false,
+  authenticated: true,
 };
 
 const el = (id) => document.getElementById(id);
 
+let toastTimer = null;
+function showToast(msg, isError = false) {
+  const node = el('app-toast');
+  if (!node) return;
+  node.textContent = msg;
+  node.classList.toggle('error', Boolean(isError));
+  node.classList.remove('hidden');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => node.classList.add('hidden'), 3200);
+}
+
+async function apiFetch(url, opts = {}) {
+  const res = await (isSidecar ? window.sidecar.fetch(url, opts) : fetch(url, opts));
+  if (res.status === 401 && !String(url).startsWith('/api/auth/login')) {
+    const clone = res.clone();
+    try {
+      const body = await clone.json();
+      if (body?.authRequired) {
+        showAuthLockOverlay();
+      }
+    } catch {}
+  }
+  return res;
+}
+
+function getActiveCustomBgHex() {
+  return state.theme === 'dark' ? state.customColors.darkBg : state.customColors.lightBg;
+}
+
+function setActiveCustomBgHex(hex) {
+  if (state.theme === 'dark') state.customColors.darkBg = hex;
+  else state.customColors.lightBg = hex;
+}
+
+function saveCustomColors() {
+  localStorage.setItem('amp-custom-rgb', JSON.stringify(state.customColors));
+}
+
 function resolvedTheme() {
+  if (state.palette === 'custom') {
+    const lum = rgbLuminance(hexToRgb(getActiveCustomBgHex()));
+    return lum < 0.46 ? 'dark' : 'light';
+  }
   return state.theme === 'dark' ? 'dark' : 'light';
+}
+
+function renderRgbPanelHtml() {
+  const bgHex = getActiveCustomBgHex();
+  const accHex = state.customColors.accent;
+  const activeSlot = state.customColors.activeSlot === 'accent' ? 'accent' : 'bg';
+  const currentHex = activeSlot === 'accent' ? accHex : bgHex;
+  const rgb = hexToRgb(currentHex);
+
+  return `
+    <div class="rgb-panel" data-rgb-panel>
+      <div class="rgb-panel-header">
+        <span>${escapeHtml(t('rgbPanelTitle'))}</span>
+        <button type="button" class="code-mini-btn" data-rgb-reset title="${escapeHtml(t('rgbResetTip'))}">${escapeHtml(t('rgbResetBtn'))}</button>
+      </div>
+      <div class="rgb-slot-tabs">
+        <button type="button" class="rgb-slot-tab ${activeSlot === 'bg' ? 'active' : ''}" data-rgb-slot="bg">
+          <span class="rgb-mini-dot" data-rgb-dot-bg style="background:${escapeHtml(bgHex)};"></span>
+          <span>${escapeHtml(t('rgbBgSlot'))}</span>
+        </button>
+        <button type="button" class="rgb-slot-tab ${activeSlot === 'accent' ? 'active' : ''}" data-rgb-slot="accent">
+          <span class="rgb-mini-dot" data-rgb-dot-accent style="background:${escapeHtml(accHex)};"></span>
+          <span>${escapeHtml(t('rgbAccentSlot'))}</span>
+        </button>
+      </div>
+      <div class="rgb-hex-row">
+        <input type="color" class="rgb-color-picker" data-rgb-picker value="${escapeHtml(currentHex)}">
+        <input type="text" class="rgb-hex-input" data-rgb-hex value="${escapeHtml(currentHex)}" maxlength="7" spellcheck="false">
+      </div>
+      <div class="rgb-slider-row">
+        <span>R</span>
+        <input type="range" class="rgb-range" min="0" max="255" value="${rgb.r}" data-rgb-channel="r">
+        <input type="number" class="rgb-num-input" min="0" max="255" value="${rgb.r}" data-rgb-num="r">
+      </div>
+      <div class="rgb-slider-row">
+        <span>G</span>
+        <input type="range" class="rgb-range" min="0" max="255" value="${rgb.g}" data-rgb-channel="g">
+        <input type="number" class="rgb-num-input" min="0" max="255" value="${rgb.g}" data-rgb-num="g">
+      </div>
+      <div class="rgb-slider-row">
+        <span>B</span>
+        <input type="range" class="rgb-range" min="0" max="255" value="${rgb.b}" data-rgb-channel="b">
+        <input type="number" class="rgb-num-input" min="0" max="255" value="${rgb.b}" data-rgb-num="b">
+      </div>
+    </div>
+  `;
 }
 
 function renderPrefsMenu() {
   const menu = el('prefs-menu');
   if (!menu) return;
-  const isDark = resolvedTheme() === 'dark';
+  const isDark = state.theme === 'dark';
   const lang = getLang();
 
   const langSegHtml = `
@@ -139,6 +350,17 @@ function renderPrefsMenu() {
     </button>`;
   }).join('');
 
+  const customBg = getActiveCustomBgHex();
+  const customGrad = `linear-gradient(135deg, ${customBg} 50%, ${state.customColors.accent} 50%)`;
+  const isCustomActive = state.palette === 'custom';
+  const customItemHtml = `<button type="button" class="theme-menu-item ${isCustomActive ? 'active' : ''}" data-theme-palette="custom">
+    <span class="theme-menu-item-left">
+      <span class="palette-dual-swatch" data-custom-main-swatch style="background:${customGrad};"></span>
+      <span>${escapeHtml(t('pal_custom'))}</span>
+    </span>
+    <span>${isCustomActive ? '✓' : ''}</span>
+  </button>`;
+
   menu.innerHTML = `
     ${langSegHtml}
     <div class="theme-menu-divider"></div>
@@ -150,13 +372,22 @@ function renderPrefsMenu() {
     <div class="theme-menu-divider"></div>
     <div class="theme-menu-section-label">${escapeHtml(t('secPalette'))}</div>
     ${paletteItemsHtml}
+    ${customItemHtml}
+    ${isCustomActive ? renderRgbPanelHtml() : ''}
   `;
 }
 
-function applyAppearance() {
-  const effectiveTheme = resolvedTheme();
-  const validPalette = THEME_PALETTES.some((p) => p.id === state.palette) ? state.palette : 'parchment';
+function applyAppearance({ rebuildMenu = true } = {}) {
+  const isCustom = state.palette === 'custom';
+  const validPalette = isCustom || THEME_PALETTES.some((p) => p.id === state.palette) ? state.palette : 'parchment';
   state.palette = validPalette;
+
+  let effectiveTheme = state.theme === 'dark' ? 'dark' : 'light';
+  if (isCustom) {
+    effectiveTheme = applyCustomPaletteCssVars(getActiveCustomBgHex(), state.customColors.accent);
+  } else {
+    clearCustomPaletteCssVars();
+  }
 
   document.documentElement.setAttribute('data-theme', effectiveTheme);
   document.documentElement.setAttribute('data-palette', validPalette);
@@ -171,19 +402,64 @@ function applyAppearance() {
     hljsDark.disabled = effectiveTheme !== 'dark';
   }
 
-  const palObj = THEME_PALETTES.find((p) => p.id === validPalette) || THEME_PALETTES[0];
   const swatchEl = el('prefs-btn-swatch');
   if (swatchEl) {
-    const bgHex = effectiveTheme === 'dark' ? palObj.darkBg : palObj.lightBg;
-    swatchEl.style.background = `linear-gradient(135deg, ${bgHex} 50%, ${palObj.accent} 50%)`;
+    if (isCustom) {
+      swatchEl.style.background = `linear-gradient(135deg, ${getActiveCustomBgHex()} 50%, ${state.customColors.accent} 50%)`;
+    } else {
+      const palObj = THEME_PALETTES.find((p) => p.id === validPalette) || THEME_PALETTES[0];
+      const bgHex = effectiveTheme === 'dark' ? palObj.darkBg : palObj.lightBg;
+      swatchEl.style.background = `linear-gradient(135deg, ${bgHex} 50%, ${palObj.accent} 50%)`;
+    }
   }
   const prefsLabel = el('prefs-btn-label');
   if (prefsLabel) {
     prefsLabel.textContent = t('prefsBtn');
   }
-  renderPrefsMenu();
+  if (rebuildMenu) {
+    renderPrefsMenu();
+  }
   transcriptRenderer?.setTheme(effectiveTheme);
   rethemeMermaidDiagrams(effectiveTheme);
+}
+
+function syncRgbControlsInPlace(nextHex) {
+  const menu = el('prefs-menu');
+  if (!menu) return;
+  const rgb = hexToRgb(nextHex);
+  const bgHex = getActiveCustomBgHex();
+  const accHex = state.customColors.accent;
+  const picker = menu.querySelector('[data-rgb-picker]');
+  const hexIn = menu.querySelector('[data-rgb-hex]');
+  if (picker && picker.value.toLowerCase() !== nextHex.toLowerCase()) picker.value = nextHex;
+  if (hexIn && document.activeElement !== hexIn) hexIn.value = nextHex;
+  for (const ch of ['r', 'g', 'b']) {
+    const rangeEl = menu.querySelector(`[data-rgb-channel="${ch}"]`);
+    const numEl = menu.querySelector(`[data-rgb-num="${ch}"]`);
+    if (rangeEl) rangeEl.value = String(rgb[ch]);
+    if (numEl && document.activeElement !== numEl) numEl.value = String(rgb[ch]);
+  }
+  const dotBg = menu.querySelector('[data-rgb-dot-bg]');
+  const dotAcc = menu.querySelector('[data-rgb-dot-accent]');
+  const mainSwatch = menu.querySelector('[data-custom-main-swatch]');
+  if (dotBg) dotBg.style.background = bgHex;
+  if (dotAcc) dotAcc.style.background = accHex;
+  if (mainSwatch) mainSwatch.style.background = `linear-gradient(135deg, ${bgHex} 50%, ${accHex} 50%)`;
+}
+
+function applyCustomSlotColorLive(nextHex) {
+  if (!isValidHex(nextHex)) return;
+  const normalized = nextHex.toLowerCase();
+  if (state.customColors.activeSlot === 'accent') {
+    state.customColors.accent = normalized;
+  } else {
+    setActiveCustomBgHex(normalized);
+  }
+  state.palette = 'custom';
+  localStorage.setItem('amp-palette', 'custom');
+  saveCustomColors();
+  applyAppearance({ rebuildMenu: false });
+  syncRgbControlsInPlace(normalized);
 }
 
 function applyLanguage(nextLang) {
@@ -200,6 +476,11 @@ function applyLanguage(nextLang) {
   const sideWrap = el('side-wrap-btn');
   if (sideWrap) {
     sideWrap.textContent = el('side-code-view')?.classList.contains('wrapped') ? t('unwrapBtn') : t('wrapBtn');
+  }
+  const maxBtn = el('mmd-modal-maximize');
+  if (maxBtn) {
+    const isMax = el('mermaid-modal-panel')?.classList.contains('maximized');
+    maxBtn.textContent = isMax ? t('mmdRestoreBtn') : t('mmdMaximizeBtn');
   }
   applyAppearance();
   if (state.eventSource) {
@@ -228,6 +509,50 @@ function applyLanguage(nextLang) {
 
 let transcriptRenderer = null;
 let hoverTimer = null;
+
+/* -------------------------------------------------------------------------
+ * Password Authentication UI
+ * ------------------------------------------------------------------------- */
+
+function updateAuthLockButton() {
+  el('lock-session-btn')?.classList.toggle('hidden', !state.authRequired || isSidecar);
+}
+
+function showAuthLockOverlay(errMsg = '') {
+  state.authenticated = false;
+  const overlay = el('auth-lock-overlay');
+  const errEl = el('auth-lock-error');
+  const input = el('auth-password-input');
+  if (errEl) {
+    errEl.textContent = errMsg || '';
+    errEl.classList.toggle('hidden', !errMsg);
+  }
+  overlay?.classList.remove('hidden');
+  setTimeout(() => input?.focus(), 40);
+}
+
+function hideAuthLockOverlay() {
+  state.authenticated = true;
+  el('auth-lock-overlay')?.classList.add('hidden');
+  el('auth-lock-error')?.classList.add('hidden');
+  const input = el('auth-password-input');
+  if (input) input.value = '';
+}
+
+async function checkAuthStatus() {
+  if (isSidecar) return { authRequired: false, authenticated: true };
+  try {
+    const res = await fetch('/api/auth/status');
+    if (!res.ok) return { authRequired: false, authenticated: true };
+    const data = await res.json();
+    state.authRequired = Boolean(data.authRequired);
+    state.authenticated = Boolean(data.authenticated);
+    updateAuthLockButton();
+    return data;
+  } catch {
+    return { authRequired: false, authenticated: true };
+  }
+}
 
 function setLiveBadge(text, kind = 'idle') {
   const pill = el('live-pill');
@@ -427,7 +752,6 @@ function renderSidebarList() {
     return;
   }
 
-  // Sessions mode: include user inputs (`preview` & `userSearchText`) in search!
   const filtered = state.conversations.filter((c) => {
     if (!query) return true;
     const proj = resolveProjectLabel(c).toLowerCase();
@@ -479,7 +803,6 @@ function renderSidebarList() {
           ? state.projectExpanded.get(grp.key)
           : (activeWithin3d || containsActiveConv));
 
-    // Separate root sessions vs subagents (subagents collapsed by default!)
     const rootAll = grp.items.filter((s) => !s.isSubagent);
     const subAll = grp.items.filter((s) => s.isSubagent);
     const subsByParent = new Map();
@@ -579,6 +902,14 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
     setLiveBadge(t('liveSync'), 'live');
   });
 
+  es.addEventListener('auth', async () => {
+    const auth = await checkAuthStatus();
+    if (auth.authRequired && !auth.authenticated) {
+      es.close();
+      showAuthLockOverlay();
+    }
+  });
+
   es.addEventListener('transcript', (ev) => {
     try {
       const data = JSON.parse(ev.data);
@@ -586,7 +917,7 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
         state.currentViewData = { ...state.currentViewData, ...data };
         applyHookPhase(data.hookState);
         const scrollEl = el('reader-scroll');
-        const nearBottom = scrollEl ? (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 120) : false;
+        const nearBottom = scrollEl ? (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 140) : false;
         transcriptRenderer.render(data.conversationId, data.view, {
           isRunning: isHookActivelyRunning(data.hookState),
           baseDir: state.currentBaseDir,
@@ -654,8 +985,13 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
     } catch {}
   });
 
-  es.onerror = () => {
+  es.onerror = async () => {
     setLiveBadge(t('reconnecting'), 'idle');
+    const auth = await checkAuthStatus();
+    if (auth.authRequired && !auth.authenticated) {
+      es.close();
+      showAuthLockOverlay();
+    }
   };
 }
 
@@ -705,19 +1041,28 @@ function scrollToLastUserTurn() {
   });
 }
 
-async function revealInFolder(rawPath, baseDir = '') {
-  if (!rawPath) return;
+async function revealInFolder(rawPath, baseDir = '', triggerBtn = null) {
+  const effectivePath = (rawPath || '').trim() || (baseDir || '').trim() || state.currentBaseDir || '';
+  if (!effectivePath) return;
   try {
     const res = await apiFetch('/api/reveal-in-folder', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: rawPath, base: baseDir || state.currentBaseDir || '' }),
+      body: JSON.stringify({ path: effectivePath, base: baseDir || state.currentBaseDir || '' }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      alert(err.error || 'Failed to open containing folder');
+      showToast(t('openFolderErr', { error: err.error || `HTTP ${res.status}` }), true);
+      return;
     }
-  } catch {}
+    if (triggerBtn) {
+      const prev = triggerBtn.textContent;
+      triggerBtn.textContent = t('folderOpenedBtn');
+      setTimeout(() => { triggerBtn.textContent = t('openFolderBtn') || prev; }, 1300);
+    }
+  } catch (err) {
+    showToast(t('openFolderErr', { error: err.message }), true);
+  }
 }
 
 async function openConversation(convId, { scrollToLatestUser = true } = {}) {
@@ -759,106 +1104,8 @@ async function openConversation(convId, { scrollToLatestUser = true } = {}) {
   }
 }
 
-function renderCustomPreview(doc) {
-  state.currentCustomDoc = doc;
-  state.currentBaseDir = doc.baseDir || '';
-  el('doc-title').textContent = doc.title || t('brandTitle');
-  const column = el('reader-column');
-
-  if (doc.parsed?.mode === 'transcript' && doc.parsed.view) {
-    transcriptRenderer.render(doc.id, doc.parsed.view, { baseDir: state.currentBaseDir });
-    return;
-  }
-
-  column.innerHTML = '';
-
-  const baseBanner = document.createElement('div');
-  baseBanner.className = 'session-ribbon';
-  baseBanner.innerHTML = `
-    <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">
-      <span style="font-weight:600;flex-shrink:0;">${escapeHtml(t('baseDirLabel'))}</span>
-      <input id="doc-basedir-input" class="input-sm" type="text" value="${escapeHtml(state.currentBaseDir)}" placeholder="${escapeHtml(t('baseDirPlaceholder'))}" style="flex:1;">
-      <button id="doc-basedir-apply" class="code-mini-btn" type="button">${escapeHtml(t('applyBtn'))}</button>
-      ${(doc.filePath || state.currentBaseDir) ? `<button id="doc-basedir-reveal" class="code-mini-btn" type="button" title="${escapeHtml(t('openFolderTip'))}">${escapeHtml(t('openFolderBtn'))}</button>` : ''}
-    </div>
-  `;
-  baseBanner.querySelector('#doc-basedir-reveal')?.addEventListener('click', () => {
-    revealInFolder(doc.filePath || state.currentBaseDir);
-  });
-  baseBanner.querySelector('#doc-basedir-apply')?.addEventListener('click', async () => {
-    const newBase = baseBanner.querySelector('#doc-basedir-input')?.value.trim() || '';
-    const res = await apiFetch(`/api/previews/${encodeURIComponent(doc.id)}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ baseDir: newBase }),
-    });
-    if (res.ok) {
-      const updated = await res.json();
-      await loadCustomPreviews();
-      renderCustomPreview(updated);
-    }
-  });
-  column.appendChild(baseBanner);
-
-  const container = document.createElement('article');
-  container.className = 'assistant-markdown';
-
-  let md = doc.parsed?.markdown ?? doc.rawText ?? '';
-  const thinkBlocks = [];
-  md = md.replace(/<(think|thinking|thought)>([\s\S]*?)<\/\1>/gi, (_, __, inner) => {
-    const idx = thinkBlocks.length;
-    thinkBlocks.push(inner.trim());
-    return `\n\n<div data-think-slot="${idx}"></div>\n\n`;
-  });
-
-  container.innerHTML = renderMarkdownHtml(md, { baseDir: state.currentBaseDir });
-
-  container.querySelectorAll('[data-think-slot]').forEach((slot) => {
-    const text = thinkBlocks[Number(slot.dataset.thinkSlot)] || '';
-    const details = document.createElement('details');
-    details.className = 'disclosure-card thinking-card';
-    details.innerHTML = `<summary class="disclosure-trigger" style="list-style:none;">
-      <span class="thinking-label">${escapeHtml(t('thoughtLabel'))}</span>
-      <span class="thinking-preview">${escapeHtml(text.split(/\r?\n/)[0] || '')}</span>
-    </summary><div class="thinking-body assistant-markdown" style="display:block;">${renderMarkdownHtml(text, { baseDir: state.currentBaseDir })}</div>`;
-    slot.replaceWith(details);
-  });
-
-  enhanceMarkdownDom(container, resolvedTheme());
-  column.appendChild(container);
-
-  const toc = [];
-  let hIdx = 0;
-  container.querySelectorAll('h1, h2, h3').forEach((h) => {
-    if (!h.id) h.id = `md-hd-${++hIdx}`;
-    const txt = h.textContent.trim();
-    toc.push({ id: h.id, label: txt, fullTitle: txt, level: Number(h.tagName.slice(1)), isTurn: false });
-  });
-  renderToc(toc);
-}
-
-async function openCustomPreview(previewId) {
-  state.mode = 'docs';
-  state.activePreviewId = previewId;
-  localStorage.setItem('amp-mode', 'docs');
-  localStorage.setItem('amp-last-preview', previewId);
-  syncUrlState({ preview: previewId });
-  updateModeButtons();
-  renderSidebarList();
-
-  try {
-    const res = await apiFetch(`/api/previews/${encodeURIComponent(previewId)}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const doc = await res.json();
-    renderCustomPreview(doc);
-    connectSSE({ previewId });
-  } catch (err) {
-    el('reader-column').innerHTML = `<div class="notice-banner error">Failed to load preview: ${escapeHtml(err.message)}</div>`;
-  }
-}
-
 /* -------------------------------------------------------------------------
- * Shared File Content Renderer (used by BOTH Popup Modal & Side Preview Pane)
+ * Shared File & Rich Media Renderer (Popup Modal, Side Pane, and Main Stage)
  * ------------------------------------------------------------------------- */
 
 function parseLineRangeHash(hashStr) {
@@ -868,6 +1115,53 @@ function parseLineRangeHash(hashStr) {
   const start = Number(m[1]);
   const end = m[2] ? Number(m[2]) : start;
   return { start: Math.min(start, end), end: Math.max(start, end) };
+}
+
+function parseDelimitedTable(rawText, delimiter = ',') {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let inQuotes = false;
+  const src = String(rawText || '').replace(/\r\n/g, '\n');
+
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (src[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === delimiter) {
+      row.push(field);
+      field = '';
+    } else if (ch === '\n') {
+      row.push(field);
+      if (row.length > 1 || row[0] !== '') rows.push(row);
+      row = [];
+      field = '';
+    } else {
+      field += ch;
+    }
+  }
+  if (field.length > 0 || row.length > 0) {
+    row.push(field);
+    if (row.length > 1 || row[0] !== '') rows.push(row);
+  }
+  return rows;
+}
+
+function formatFileSize(bytes) {
+  if (!bytes || bytes < 1024) return `${bytes || 0} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
 function renderCodeWithLineNumbers(content, lang, lineRange, viewId = 'side-code-view') {
@@ -902,12 +1196,138 @@ function renderCodeWithLineNumbers(content, lang, lineRange, viewId = 'side-code
   return `<div id="${viewId}" class="side-code-view"><table class="side-code-table"><tbody>${rowsHtml}</tbody></table></div>`;
 }
 
+function bindMediaStageControls(bodyEl) {
+  const mediaEl = bodyEl.querySelector('video, audio');
+  if (mediaEl) {
+    bodyEl.querySelectorAll('[data-media-rate]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const rate = Number(btn.dataset.mediaRate) || 1;
+        mediaEl.playbackRate = rate;
+        bodyEl.querySelectorAll('[data-media-rate]').forEach((b) => b.classList.toggle('active', b === btn));
+      });
+    });
+    const loopBtn = bodyEl.querySelector('[data-media-loop]');
+    loopBtn?.addEventListener('click', () => {
+      mediaEl.loop = !mediaEl.loop;
+      loopBtn.classList.toggle('active', mediaEl.loop);
+    });
+  }
+
+  bodyEl.querySelector('[data-reveal-path]')?.addEventListener('click', (e) => {
+    revealInFolder(e.currentTarget.dataset.revealPath, '', e.currentTarget);
+  });
+
+  const csvWrap = bodyEl.querySelector('[data-csv-stage]');
+  if (csvWrap) {
+    const tablePane = csvWrap.querySelector('[data-csv-table-pane]');
+    const rawPane = csvWrap.querySelector('[data-csv-raw-pane]');
+    csvWrap.querySelector('[data-csv-mode="table"]')?.addEventListener('click', (e) => {
+      tablePane?.classList.remove('hidden');
+      rawPane?.classList.add('hidden');
+      csvWrap.querySelectorAll('[data-csv-mode]').forEach((b) => b.classList.toggle('active', b === e.currentTarget));
+    });
+    csvWrap.querySelector('[data-csv-mode="raw"]')?.addEventListener('click', (e) => {
+      tablePane?.classList.add('hidden');
+      rawPane?.classList.remove('hidden');
+      csvWrap.querySelectorAll('[data-csv-mode]').forEach((b) => b.classList.toggle('active', b === e.currentTarget));
+    });
+  }
+}
+
 function populatePreviewBody(bodyEl, info, codeViewId) {
   if (info.kind === 'image') {
     bodyEl.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
       <img src="${escapeHtml(info.rawUrl)}" alt="${escapeHtml(info.filename)}" class="md-image" data-zoomable="true" style="max-height:74vh;">
-      <span style="font-size:0.75rem;color:var(--text-faint);">${(info.size / 1024).toFixed(1)} KB</span>
+      <span style="font-size:0.75rem;color:var(--text-faint);">${escapeHtml(formatFileSize(info.size))}</span>
     </div>`;
+    return;
+  }
+
+  if (info.kind === 'pdf') {
+    const hashSuffix = info.hash ? `#${info.hash}` : '';
+    const pdfSrc = `${info.rawUrl}${hashSuffix}`;
+    bodyEl.innerHTML = `<div class="media-preview-stage">
+      <div class="media-toolbar">
+        <span>PDF · ${escapeHtml(formatFileSize(info.size))}</span>
+        <div style="display:flex;gap:6px;">
+          <a href="${escapeHtml(pdfSrc)}" target="_blank" rel="noopener noreferrer" class="code-mini-btn" style="text-decoration:none;" title="${escapeHtml(t('pdfOpenTabTip'))}">${escapeHtml(t('pdfOpenTabBtn'))}</a>
+        </div>
+      </div>
+      <iframe class="media-pdf-frame" src="${escapeHtml(pdfSrc)}" title="${escapeHtml(info.filename)}"></iframe>
+    </div>`;
+    return;
+  }
+
+  if (info.kind === 'video') {
+    const speeds = [0.5, 1, 1.25, 1.5, 2];
+    bodyEl.innerHTML = `<div class="media-preview-stage">
+      <div class="media-toolbar">
+        <span>${escapeHtml((info.ext || 'video').toUpperCase().replace('.', ''))} · ${escapeHtml(formatFileSize(info.size))}</span>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          <span>${escapeHtml(t('mediaSpeedLabel'))}:</span>
+          <div class="prefs-seg-group">
+            ${speeds.map((s) => `<button type="button" class="prefs-seg-btn ${s === 1 ? 'active' : ''}" data-media-rate="${s}">${s}×</button>`).join('')}
+          </div>
+          <button type="button" class="prefs-seg-btn" data-media-loop style="border:1px solid var(--border);">${escapeHtml(t('mediaLoopBtn'))}</button>
+        </div>
+      </div>
+      <div class="media-video-box">
+        <video class="media-video-player" src="${escapeHtml(info.rawUrl)}" controls playsinline preload="metadata"></video>
+      </div>
+    </div>`;
+    bindMediaStageControls(bodyEl);
+    return;
+  }
+
+  if (info.kind === 'audio') {
+    const speeds = [0.75, 1, 1.25, 1.5, 2];
+    bodyEl.innerHTML = `<div class="media-preview-stage">
+      <div class="media-audio-card">
+        <strong style="font-size:0.92rem;color:var(--text-main);">🎵 ${escapeHtml(info.filename)}</strong>
+        <span style="font-size:0.75rem;color:var(--text-faint);">${escapeHtml(formatFileSize(info.size))}</span>
+        <audio class="media-audio-player" src="${escapeHtml(info.rawUrl)}" controls preload="metadata"></audio>
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          <span style="font-size:0.74rem;color:var(--text-muted);">${escapeHtml(t('mediaSpeedLabel'))}:</span>
+          <div class="prefs-seg-group">
+            ${speeds.map((s) => `<button type="button" class="prefs-seg-btn ${s === 1 ? 'active' : ''}" data-media-rate="${s}">${s}×</button>`).join('')}
+          </div>
+          <button type="button" class="prefs-seg-btn" data-media-loop style="border:1px solid var(--border);">${escapeHtml(t('mediaLoopBtn'))}</button>
+        </div>
+      </div>
+    </div>`;
+    bindMediaStageControls(bodyEl);
+    return;
+  }
+
+  if (info.kind === 'csv') {
+    const delim = info.ext === '.tsv' ? '\t' : ',';
+    const allRows = parseDelimitedTable(info.content || '', delim);
+    const maxRows = 400;
+    const shownRows = allRows.slice(0, maxRows);
+    const header = shownRows[0] || [];
+    const bodyRows = shownRows.slice(1);
+    const truncNote = allRows.length > maxRows
+      ? ` · ${escapeHtml(t('csvTruncatedHint', { shown: maxRows, total: allRows.length }))}`
+      : '';
+    const theadHtml = header.length
+      ? `<thead><tr>${header.map((c) => `<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>`
+      : '';
+    const tbodyHtml = bodyRows.map((r) => `<tr>${r.map((c) => `<td>${escapeHtml(c)}</td>`).join('')}</tr>`).join('');
+
+    bodyEl.innerHTML = `<div data-csv-stage style="display:flex;flex-direction:column;gap:10px;">
+      <div class="media-toolbar">
+        <span>${escapeHtml(t('csvMeta', { rows: Math.max(0, allRows.length - 1), cols: header.length }))}${truncNote}</span>
+        <div class="prefs-seg-group">
+          <button type="button" class="prefs-seg-btn active" data-csv-mode="table">${escapeHtml(t('csvTableBtn'))}</button>
+          <button type="button" class="prefs-seg-btn" data-csv-mode="raw">${escapeHtml(t('csvRawBtn'))}</button>
+        </div>
+      </div>
+      <div data-csv-table-pane class="assistant-markdown">
+        <div class="table-card expanded"><div class="table-wrap"><table>${theadHtml}<tbody>${tbodyHtml}</tbody></table></div></div>
+      </div>
+      <div data-csv-raw-pane class="hidden">${renderCodeWithLineNumbers(info.content || '', 'plaintext', null, codeViewId)}</div>
+    </div>`;
+    bindMediaStageControls(bodyEl);
     return;
   }
 
@@ -946,7 +1366,125 @@ function populatePreviewBody(bodyEl, info, codeViewId) {
     <span>${escapeHtml(t('binaryFileNotice', { size: (info.size / 1024).toFixed(1) }))} <code>${escapeHtml(info.path)}</code></span>
     <button type="button" class="code-mini-btn" data-reveal-path="${escapeHtml(info.path)}" title="${escapeHtml(t('openFolderTip'))}">${escapeHtml(t('openFolderBtn'))}</button>
   </div>`;
-  bodyEl.querySelector('[data-reveal-path]')?.addEventListener('click', () => revealInFolder(info.path));
+  bindMediaStageControls(bodyEl);
+}
+
+function renderCustomPreview(doc) {
+  state.currentCustomDoc = doc;
+  state.currentBaseDir = doc.baseDir || '';
+  el('doc-title').textContent = doc.title || t('brandTitle');
+  const column = el('reader-column');
+
+  if (doc.parsed?.mode === 'transcript' && doc.parsed.view) {
+    transcriptRenderer.render(doc.id, doc.parsed.view, { baseDir: state.currentBaseDir });
+    return;
+  }
+
+  column.innerHTML = '';
+
+  const baseBanner = document.createElement('div');
+  baseBanner.className = 'session-ribbon';
+  baseBanner.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;">
+      <span style="font-weight:600;flex-shrink:0;">${escapeHtml(t('baseDirLabel'))}</span>
+      <input id="doc-basedir-input" class="input-sm" type="text" value="${escapeHtml(state.currentBaseDir)}" placeholder="${escapeHtml(t('baseDirPlaceholder'))}" style="flex:1;">
+      <button id="doc-basedir-apply" class="code-mini-btn" type="button">${escapeHtml(t('applyBtn'))}</button>
+      ${(doc.filePath || state.currentBaseDir) ? `<button id="doc-basedir-reveal" class="code-mini-btn" type="button" title="${escapeHtml(t('openFolderTip'))}">${escapeHtml(t('openFolderBtn'))}</button>` : ''}
+    </div>
+  `;
+  baseBanner.querySelector('#doc-basedir-reveal')?.addEventListener('click', (e) => {
+    revealInFolder(doc.filePath || state.currentBaseDir, state.currentBaseDir, e.currentTarget);
+  });
+  baseBanner.querySelector('#doc-basedir-apply')?.addEventListener('click', async () => {
+    const newBase = baseBanner.querySelector('#doc-basedir-input')?.value.trim() || '';
+    const res = await apiFetch(`/api/previews/${encodeURIComponent(doc.id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseDir: newBase }),
+    });
+    if (res.ok) {
+      const updated = await res.json();
+      await loadCustomPreviews();
+      renderCustomPreview(updated);
+    }
+  });
+  column.appendChild(baseBanner);
+
+  if ((doc.parsed?.mode === 'media' || doc.parsed?.mode === 'csv') && doc.filePath) {
+    const mediaStage = document.createElement('div');
+    column.appendChild(mediaStage);
+    populatePreviewBody(mediaStage, {
+      path: doc.filePath,
+      filename: doc.title || doc.filePath.split(/[\\/]/).pop(),
+      baseDir: state.currentBaseDir,
+      hash: '',
+      size: doc.parsed.size || (doc.rawText ? doc.rawText.length : 0),
+      kind: doc.parsed.mediaKind || 'csv',
+      ext: doc.parsed.ext || (doc.filePath.includes('.') ? `.${doc.filePath.split('.').pop().toLowerCase()}` : ''),
+      rawUrl: `/api/raw-file?path=${encodeURIComponent(doc.filePath)}`,
+      content: doc.rawText || '',
+    }, 'main-csv-code-view');
+    renderToc([]);
+    return;
+  }
+
+  const container = document.createElement('article');
+  container.className = 'assistant-markdown';
+
+  let md = doc.parsed?.markdown ?? doc.rawText ?? '';
+  const thinkBlocks = [];
+  md = md.replace(/<(think|thinking|thought)>([\s\S]*?)<\/\1>/gi, (_, __, inner) => {
+    const idx = thinkBlocks.length;
+    thinkBlocks.push(inner.trim());
+    return `\n\n<div data-think-slot="${idx}"></div>\n\n`;
+  });
+
+  container.innerHTML = renderMarkdownHtml(md, { baseDir: state.currentBaseDir });
+
+  container.querySelectorAll('[data-think-slot]').forEach((slot) => {
+    const text = thinkBlocks[Number(slot.dataset.thinkSlot)] || '';
+    const details = document.createElement('details');
+    details.className = 'disclosure-card thinking-card';
+    details.innerHTML = `<summary class="disclosure-trigger" style="list-style:none;">
+      <span class="thinking-label">${escapeHtml(t('thoughtLabel'))}</span>
+      <span class="thinking-preview">${escapeHtml(text.split(/\r?\n/)[0] || '')}</span>
+    </summary><div class="thinking-body assistant-markdown" style="display:block;">${renderMarkdownHtml(text, { baseDir: state.currentBaseDir })}</div>`;
+    slot.replaceWith(details);
+  });
+
+  enhanceMarkdownDom(container, resolvedTheme());
+  column.appendChild(container);
+
+  const toc = [];
+  const seenIds = new Set();
+  let hIdx = 0;
+  container.querySelectorAll('h1, h2, h3').forEach((h) => {
+    if (!h.id || seenIds.has(h.id)) h.id = `md-hd-${++hIdx}`;
+    seenIds.add(h.id);
+    const txt = h.textContent.trim();
+    toc.push({ id: h.id, label: txt, fullTitle: txt, level: Number(h.tagName.slice(1)), isTurn: false });
+  });
+  renderToc(toc);
+}
+
+async function openCustomPreview(previewId) {
+  state.mode = 'docs';
+  state.activePreviewId = previewId;
+  localStorage.setItem('amp-mode', 'docs');
+  localStorage.setItem('amp-last-preview', previewId);
+  syncUrlState({ preview: previewId });
+  updateModeButtons();
+  renderSidebarList();
+
+  try {
+    const res = await apiFetch(`/api/previews/${encodeURIComponent(previewId)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const doc = await res.json();
+    renderCustomPreview(doc);
+    connectSSE({ previewId });
+  } catch (err) {
+    el('reader-column').innerHTML = `<div class="notice-banner error">Failed to load preview: ${escapeHtml(err.message)}</div>`;
+  }
 }
 
 async function fetchFileInfo(rawHref, baseDir) {
@@ -961,13 +1499,14 @@ async function fetchFileInfo(rawHref, baseDir) {
   return info;
 }
 
-/* 1. Popup Preview Modal (triggered by clicking hyperlinks directly) */
+/* 1. Popup Preview Modal */
 async function openInPopupModal(rawHref, baseDir = '') {
   const modal = el('file-preview-modal');
   const body = el('popup-preview-body');
   if (!modal || !body) return;
 
   modal.classList.remove('hidden');
+  state.popupCurrent = { rawHref, baseDir: baseDir || state.currentBaseDir || '' };
   el('popup-preview-title').textContent = rawHref.split(/[\\/]/).pop() || t('loadingPreview');
   el('popup-preview-path').textContent = rawHref;
   body.innerHTML = `<div style="color:var(--text-faint);font-size:0.82rem;">${escapeHtml(t('loadingPreview'))}</div>`;
@@ -978,13 +1517,14 @@ async function openInPopupModal(rawHref, baseDir = '') {
     el('popup-preview-title').textContent = info.filename;
     el('popup-preview-path').textContent = info.path + (info.hash ? `#${info.hash}` : '');
     el('popup-wrap-btn')?.classList.toggle('hidden', info.kind !== 'code');
+    el('popup-copy-btn')?.classList.toggle('hidden', info.kind === 'pdf' || info.kind === 'video' || info.kind === 'audio');
     populatePreviewBody(body, info, 'popup-code-view');
   } catch (err) {
     body.innerHTML = `<div class="notice-banner error">${escapeHtml(err.message)}</div>`;
   }
 }
 
-/* 2. Right Split Side Preview Pane (triggered by [Open in sidebar]) */
+/* 2. Right Split Side Preview Pane */
 function updateSideNavButtons() {
   const backBtn = el('side-back-btn');
   const fwdBtn = el('side-fwd-btn');
@@ -1000,13 +1540,14 @@ async function openInSidePreview(rawHref, baseDir = '', { pushHistory = true } =
 
   pane.classList.remove('hidden');
   resizer?.classList.remove('hidden');
+  state.sideCurrent = { rawHref, baseDir: baseDir || state.currentBaseDir || '' };
   el('side-preview-title').textContent = rawHref.split(/[\\/]/).pop() || t('loadingPreview');
   el('side-preview-path').textContent = rawHref;
   body.innerHTML = `<div style="color:var(--text-faint);font-size:0.82rem;">${escapeHtml(t('loadingPreview'))}</div>`;
 
   try {
     const info = await fetchFileInfo(rawHref, baseDir);
-    state.sideCurrent = info;
+    state.sideCurrent = { ...info, rawHref };
     if (pushHistory) {
       state.sideHistory = state.sideHistory.slice(0, state.sideHistoryIdx + 1);
       state.sideHistory.push({ rawHref: info.path + (info.hash ? `#${info.hash}` : ''), baseDir: info.baseDir });
@@ -1018,8 +1559,10 @@ async function openInSidePreview(rawHref, baseDir = '', { pushHistory = true } =
     el('side-preview-path').textContent = info.path;
     el('side-preview-path').title = info.path;
 
-    el('side-promote-btn')?.classList.toggle('hidden', info.kind !== 'markdown');
+    const promotable = info.kind === 'markdown' || info.kind === 'pdf' || info.kind === 'video' || info.kind === 'audio' || info.kind === 'csv';
+    el('side-promote-btn')?.classList.toggle('hidden', !promotable);
     el('side-wrap-btn')?.classList.toggle('hidden', info.kind !== 'code');
+    el('side-copy-btn')?.classList.toggle('hidden', info.kind === 'pdf' || info.kind === 'video' || info.kind === 'audio');
 
     populatePreviewBody(body, info, 'side-code-view');
   } catch (err) {
@@ -1044,6 +1587,28 @@ function openZoomImage(src, alt) {
   modal.classList.remove('hidden');
 }
 
+/* -------------------------------------------------------------------------
+ * Larger & User-Resizable Mermaid Fullscreen Modal
+ * ------------------------------------------------------------------------- */
+
+function applySavedMermaidModalSize() {
+  const panel = el('mermaid-modal-panel');
+  if (!panel || panel.classList.contains('maximized')) return;
+  try {
+    const saved = JSON.parse(localStorage.getItem('amp-mmd-modal-size') || 'null');
+    if (saved && saved.w >= 460 && saved.h >= 320) {
+      panel.style.width = `${Math.min(window.innerWidth - 12, saved.w)}px`;
+      panel.style.height = `${Math.min(window.innerHeight - 12, saved.h)}px`;
+    } else {
+      panel.style.width = '';
+      panel.style.height = '';
+    }
+  } catch {
+    panel.style.width = '';
+    panel.style.height = '';
+  }
+}
+
 function fitMermaidModalToScreen() {
   const viewport = el('mermaid-modal-viewport');
   const svg = el('mermaid-modal-canvas')?.querySelector('svg');
@@ -1053,7 +1618,7 @@ function fitMermaidModalToScreen() {
   const vb = (svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
   const natW = vb.length === 4 && vb[2] > 0 ? vb[2] : (svg.clientWidth || 600);
   const natH = vb.length === 4 && vb[3] > 0 ? vb[3] : (svg.clientHeight || 600);
-  const fitScale = Math.min(1.5, (vRect.width - 56) / natW, (vRect.height - 56) / natH);
+  const fitScale = Math.min(2.4, (vRect.width - 44) / natW, (vRect.height - 44) / natH);
   ctrl.setTransform(fitScale, 0, 0);
 }
 
@@ -1063,6 +1628,8 @@ function openFullscreenMermaid(svgEl) {
   const canvas = el('mermaid-modal-canvas');
   const resetBtn = el('mmd-modal-zoom-reset');
   if (!modal || !viewport || !canvas || !svgEl) return;
+
+  applySavedMermaidModalSize();
 
   const cloned = svgEl.cloneNode(true);
   cloned.style.maxWidth = 'none';
@@ -1092,9 +1659,86 @@ function openFullscreenMermaid(svgEl) {
 
   requestAnimationFrame(() => {
     const vRect = viewport.getBoundingClientRect();
-    // Start fitted cleanly inside the big screen if oversized, or 100% if already comfortable
-    const fitScale = Math.min(1.15, (vRect.width - 64) / natW, (vRect.height - 64) / natH);
+    const fitScale = Math.min(2.0, (vRect.width - 48) / natW, (vRect.height - 48) / natH);
     ctrl?.setTransform(fitScale, 0, 0);
+  });
+}
+
+function initMermaidModalResizer() {
+  const panel = el('mermaid-modal-panel');
+  const maxBtn = el('mmd-modal-maximize');
+  if (!panel) return;
+
+  let activeDir = '';
+  let startX = 0;
+  let startY = 0;
+  let startW = 0;
+  let startH = 0;
+
+  panel.querySelectorAll('[data-mmd-resize]').forEach((handle) => {
+    handle.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (panel.classList.contains('maximized')) {
+        panel.classList.remove('maximized');
+        if (maxBtn) maxBtn.textContent = t('mmdMaximizeBtn');
+      }
+      const rect = panel.getBoundingClientRect();
+      activeDir = handle.dataset.mmdResize;
+      startX = e.clientX;
+      startY = e.clientY;
+      startW = rect.width;
+      startH = rect.height;
+      document.body.style.userSelect = 'none';
+    });
+
+    if (handle.dataset.mmdResize === 'se') {
+      handle.addEventListener('dblclick', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        localStorage.removeItem('amp-mmd-modal-size');
+        panel.classList.remove('maximized');
+        panel.style.width = '';
+        panel.style.height = '';
+        if (maxBtn) maxBtn.textContent = t('mmdMaximizeBtn');
+        requestAnimationFrame(fitMermaidModalToScreen);
+      });
+    }
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!activeDir) return;
+    const dx = e.clientX - startX;
+    const dy = e.clientY - startY;
+    let nextW = startW;
+    let nextH = startH;
+
+    if (activeDir.includes('e')) nextW = startW + dx * 2;
+    if (activeDir.includes('w')) nextW = startW - dx * 2;
+    if (activeDir.includes('s')) nextH = startH + dy * 2;
+    if (activeDir.includes('n')) nextH = startH - dy * 2;
+
+    nextW = Math.max(460, Math.min(window.innerWidth - 8, nextW));
+    nextH = Math.max(320, Math.min(window.innerHeight - 8, nextH));
+
+    panel.style.width = `${Math.round(nextW)}px`;
+    panel.style.height = `${Math.round(nextH)}px`;
+  });
+
+  window.addEventListener('mouseup', () => {
+    if (!activeDir) return;
+    activeDir = '';
+    document.body.style.userSelect = '';
+    const rect = panel.getBoundingClientRect();
+    localStorage.setItem('amp-mmd-modal-size', JSON.stringify({ w: Math.round(rect.width), h: Math.round(rect.height) }));
+  });
+
+  maxBtn?.addEventListener('click', () => {
+    const isMax = panel.classList.toggle('maximized');
+    maxBtn.textContent = isMax ? t('mmdRestoreBtn') : t('mmdMaximizeBtn');
+    if (!isMax) applySavedMermaidModalSize();
+    requestAnimationFrame(fitMermaidModalToScreen);
   });
 }
 
@@ -1186,7 +1830,7 @@ function updateModeButtons() {
 
 function exportCurrentMarkdown() {
   let mdOut = '';
-  let filename = 'antigravity-preview.md';
+  let filename = 'antigravity-session-preview.md';
 
   if (state.mode === 'docs' && state.currentCustomDoc) {
     mdOut = state.currentCustomDoc.rawText || '';
@@ -1309,7 +1953,7 @@ async function submitCustomPreview({ id, title, content, mode, filePath, dropped
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: 'Failed' }));
-    alert(err.error || 'Failed to render preview');
+    showToast(err.error || 'Failed to render preview', true);
     return;
   }
   const doc = await res.json();
@@ -1374,6 +2018,38 @@ async function commitDocRename(docId, newTitle) {
     }
   } else {
     renderSidebarList();
+  }
+}
+
+async function loadInitialWorkspaceContent() {
+  await loadFlavors();
+  await Promise.all([loadConversations(), loadCustomPreviews()]);
+
+  const params = new URLSearchParams(window.location.search);
+  const queryConv = params.get('conv') || (isSidecar ? window.sidecar.conversationId : '');
+  const queryPreview = params.get('preview');
+  const queryMode = params.get('mode');
+  const queryFlavor = params.get('flavor');
+  if (queryFlavor) state.flavor = queryFlavor;
+
+  const savedMode = localStorage.getItem('amp-mode');
+  const savedPreview = localStorage.getItem('amp-last-preview');
+
+  if (queryPreview && state.customPreviews.some((d) => d.id === queryPreview)) {
+    await openCustomPreview(queryPreview);
+  } else if ((queryMode === 'docs' || (!queryConv && savedMode === 'docs')) && state.customPreviews.length > 0) {
+    const targetDoc = state.customPreviews.some((d) => d.id === savedPreview) ? savedPreview : state.customPreviews[0].id;
+    await openCustomPreview(targetDoc);
+  } else if (queryMode === 'docs') {
+    el('mode-docs-btn')?.click();
+  } else if (queryConv) {
+    await openConversation(queryConv);
+  } else if (state.conversations.length > 0) {
+    await openConversation(state.conversations[0].id);
+  } else if (state.customPreviews.length > 0) {
+    await openCustomPreview(state.customPreviews[0].id);
+  } else {
+    connectSSE();
   }
 }
 
@@ -1445,6 +2121,53 @@ async function bootstrap() {
   attachCodeCardInteractions(el('popup-preview-body'), mdCallbacks);
   attachCodeCardInteractions(el('cli-tools-drawer'), mdCallbacks);
   initSidePaneResizer();
+  initMermaidModalResizer();
+
+  // Password Lock Overlay listeners
+  el('auth-toggle-vis-btn')?.addEventListener('click', () => {
+    const inp = el('auth-password-input');
+    if (inp) inp.type = inp.type === 'password' ? 'text' : 'password';
+  });
+  el('auth-lock-form')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const inp = el('auth-password-input');
+    const btn = el('auth-submit-btn');
+    const pwd = inp?.value || '';
+    if (!pwd.trim()) return;
+    if (btn) {
+      btn.disabled = true;
+      btn.textContent = t('unlockingBtn');
+    }
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pwd }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showAuthLockOverlay(data.error || t('lockErrorWrong'));
+      } else {
+        hideAuthLockOverlay();
+        await loadInitialWorkspaceContent();
+      }
+    } catch (err) {
+      showAuthLockOverlay(err.message);
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = t('unlockBtn');
+      }
+    }
+  });
+  el('lock-session-btn')?.addEventListener('click', async () => {
+    await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+    if (state.eventSource) {
+      state.eventSource.close();
+      state.eventSource = null;
+    }
+    showAuthLockOverlay();
+  });
 
   // Sidebar & Toolbar listeners
   el('sidebar-toggle-btn')?.addEventListener('click', () => {
@@ -1506,7 +2229,6 @@ async function bootstrap() {
 
   const sessionListEl = el('session-list');
 
-  // Docs Hover Popover listeners
   sessionListEl?.addEventListener('mouseover', (e) => {
     if (state.mode !== 'docs' || state.docsManageMode) return;
     const card = e.target.closest('[data-doc-card]');
@@ -1523,7 +2245,6 @@ async function bootstrap() {
   });
   sessionListEl?.addEventListener('scroll', hideDocHoverPopover);
 
-  // Docs Drag-and-Drop Reorder listeners
   sessionListEl?.addEventListener('dragstart', (e) => {
     const card = e.target.closest('[data-doc-card]');
     if (!card || !state.docsManageMode) return;
@@ -1574,7 +2295,6 @@ async function bootstrap() {
     sessionListEl.querySelectorAll('.doc-item-card.drag-over').forEach((n) => n.classList.remove('drag-over'));
   });
 
-  // Inline rename input commit/cancel
   sessionListEl?.addEventListener('keydown', (e) => {
     const inp = e.target.closest('[data-rename-input]');
     if (!inp) return;
@@ -1675,15 +2395,14 @@ async function bootstrap() {
   });
   el('popup-to-sidebar-btn')?.addEventListener('click', () => {
     if (state.popupCurrent) {
-      const href = state.popupCurrent.path + (state.popupCurrent.hash ? `#${state.popupCurrent.hash}` : '');
+      const href = (state.popupCurrent.path || state.popupCurrent.rawHref || '') + (state.popupCurrent.hash ? `#${state.popupCurrent.hash}` : '');
       el('file-preview-modal')?.classList.add('hidden');
       openInSidePreview(href, state.popupCurrent.baseDir);
     }
   });
-  el('popup-reveal-btn')?.addEventListener('click', () => {
-    if (state.popupCurrent?.path) {
-      revealInFolder(state.popupCurrent.path, state.popupCurrent.baseDir);
-    }
+  el('popup-reveal-btn')?.addEventListener('click', (e) => {
+    const targetPath = state.popupCurrent?.path || state.popupCurrent?.rawHref || el('popup-preview-path')?.textContent || '';
+    revealInFolder(targetPath, state.popupCurrent?.baseDir || state.currentBaseDir, e.currentTarget);
   });
   el('popup-wrap-btn')?.addEventListener('click', (e) => {
     const view = el('popup-code-view');
@@ -1701,7 +2420,7 @@ async function bootstrap() {
     } catch {}
   });
 
-  // Side Preview Pane controls
+  // Side Preview Pane controls (including fixed 📂 目录 / Folder button)
   el('side-close-btn')?.addEventListener('click', closeSidePreview);
   el('side-back-btn')?.addEventListener('click', () => {
     if (state.sideHistoryIdx > 0) {
@@ -1717,10 +2436,9 @@ async function bootstrap() {
       openInSidePreview(item.rawHref, item.baseDir, { pushHistory: false });
     }
   });
-  el('side-reveal-btn')?.addEventListener('click', () => {
-    if (state.sideCurrent?.path) {
-      revealInFolder(state.sideCurrent.path, state.sideCurrent.baseDir);
-    }
+  el('side-reveal-btn')?.addEventListener('click', (e) => {
+    const targetPath = state.sideCurrent?.path || state.sideCurrent?.rawHref || el('side-preview-path')?.textContent || '';
+    revealInFolder(targetPath, state.sideCurrent?.baseDir || state.currentBaseDir, e.currentTarget);
   });
   el('side-wrap-btn')?.addEventListener('click', (e) => {
     const view = el('side-code-view');
@@ -1747,7 +2465,6 @@ async function bootstrap() {
   el('sync-btn')?.addEventListener('click', manualSync);
   el('export-btn')?.addEventListener('click', exportCurrentMarkdown);
 
-  // Jump to Top & Jump to Bottom buttons
   el('jump-top-btn')?.addEventListener('click', () => {
     el('reader-scroll')?.scrollTo({ top: 0, behavior: 'smooth' });
   });
@@ -1842,7 +2559,7 @@ async function bootstrap() {
     }
   });
 
-  // Unified Persistent Preferences Dropdown (placed left of Sync)
+  // Unified Persistent Preferences Dropdown + Live Custom RGB Panel
   el('prefs-btn')?.addEventListener('click', (e) => {
     e.stopPropagation();
     el('tools-menu')?.classList.add('hidden');
@@ -1890,6 +2607,52 @@ async function bootstrap() {
       state.palette = palBtn.dataset.themePalette;
       localStorage.setItem('amp-palette', state.palette);
       applyAppearance();
+      return;
+    }
+    const rgbSlotBtn = e.target.closest('[data-rgb-slot]');
+    if (rgbSlotBtn) {
+      state.customColors.activeSlot = rgbSlotBtn.dataset.rgbSlot === 'accent' ? 'accent' : 'bg';
+      saveCustomColors();
+      renderPrefsMenu();
+      return;
+    }
+    if (e.target.closest('[data-rgb-reset]')) {
+      state.customColors = { ...DEFAULT_CUSTOM_COLORS, activeSlot: state.customColors.activeSlot };
+      saveCustomColors();
+      applyAppearance();
+    }
+  });
+
+  el('prefs-menu')?.addEventListener('input', (e) => {
+    const picker = e.target.closest('[data-rgb-picker]');
+    if (picker && isValidHex(picker.value)) {
+      applyCustomSlotColorLive(picker.value);
+      return;
+    }
+    const hexIn = e.target.closest('[data-rgb-hex]');
+    if (hexIn) {
+      const candidate = hexIn.value.startsWith('#') ? hexIn.value : `#${hexIn.value}`;
+      if (isValidHex(candidate)) {
+        applyCustomSlotColorLive(candidate);
+      }
+      return;
+    }
+    const rangeCh = e.target.closest('[data-rgb-channel]');
+    const numCh = e.target.closest('[data-rgb-num]');
+    if (rangeCh || numCh) {
+      const menu = el('prefs-menu');
+      const curHex = state.customColors.activeSlot === 'accent' ? state.customColors.accent : getActiveCustomBgHex();
+      const rgb = hexToRgb(curHex);
+      const ch = rangeCh ? rangeCh.dataset.rgbChannel : numCh.dataset.rgbNum;
+      rgb[ch] = clampByte((rangeCh || numCh).value);
+      const nextHex = rgbToHex(rgb.r, rgb.g, rgb.b);
+      if (menu) {
+        const peer = rangeCh
+          ? menu.querySelector(`[data-rgb-num="${ch}"]`)
+          : menu.querySelector(`[data-rgb-channel="${ch}"]`);
+        if (peer) peer.value = String(rgb[ch]);
+      }
+      applyCustomSlotColorLive(nextHex);
     }
   });
 
@@ -1958,25 +2721,30 @@ async function bootstrap() {
     if (svg) downloadSvgElement(svg, 'mermaid-elk-diagram.svg');
   });
 
-  // External OS File Drag-and-Drop onto window (resolves true source path on disk, NEVER inherits stale baseDir!)
+  // External OS File Drag-and-Drop onto window
   document.addEventListener('dragover', (e) => {
-    if (state.dragDocId) return; // Internal reorder handled by sessionListEl
+    if (state.dragDocId) return;
     e.preventDefault();
   });
   document.addEventListener('drop', async (e) => {
     if (state.dragDocId) return;
     e.preventDefault();
 
-    // 1. Check if editor/explorer provided file:/// URI directly
     const uriList = (e.dataTransfer?.getData('text/uri-list') || '').split(/\r?\n/).find((l) => l && !l.startsWith('#'));
     if (uriList && uriList.startsWith('file://')) {
       await submitCustomPreview({ filePath: uriList, mode: 'auto' });
       return;
     }
 
-    // 2. Match dropped file byte-for-byte on disk across workspaces so relative links resolve accurately!
     const file = e.dataTransfer?.files?.[0];
     if (!file) return;
+    const lowerName = (file.name || '').toLowerCase();
+    const isBinaryExt = /\.(pdf|mp4|webm|mov|m4v|ogv|mkv|avi|mp3|wav|flac|ogg|oga|m4a|aac|opus|png|jpg|jpeg|gif|webp|bmp|ico|avif)$/i.test(lowerName);
+    if (isBinaryExt) {
+      el('paste-modal')?.classList.remove('hidden');
+      showToast(getLang() === 'zh' ? '请点击「📂 浏览…」选择该媒体文件以直接流式预览' : 'Click "📂 Browse…" to stream binary PDF/media files directly from disk');
+      return;
+    }
     const text = await file.text();
     await submitCustomPreview({
       title: file.name,
@@ -1988,6 +2756,7 @@ async function bootstrap() {
 
   // Keyboard shortcuts
   document.addEventListener('keydown', (e) => {
+    if (!el('auth-lock-overlay')?.classList.contains('hidden')) return;
     const tag = document.activeElement?.tagName;
     const typing = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 
@@ -2070,41 +2839,19 @@ async function bootstrap() {
     }
   });
 
-  if (isSidecar) {
-    el('sidebar')?.classList.add('collapsed');
+  if (isSidecar || window.innerWidth <= 860) {
+    if (isSidecar) el('sidebar')?.classList.add('collapsed');
     el('toc-drawer')?.classList.add('hidden');
     el('toc-toggle-btn')?.classList.remove('active');
   }
 
-  await loadFlavors();
-  await Promise.all([loadConversations(), loadCustomPreviews()]);
-
-  const params = new URLSearchParams(window.location.search);
-  const queryConv = params.get('conv') || (isSidecar ? window.sidecar.conversationId : '');
-  const queryPreview = params.get('preview');
-  const queryMode = params.get('mode');
-  const queryFlavor = params.get('flavor');
-  if (queryFlavor) state.flavor = queryFlavor;
-
-  const savedMode = localStorage.getItem('amp-mode');
-  const savedPreview = localStorage.getItem('amp-last-preview');
-
-  if (queryPreview && state.customPreviews.some((d) => d.id === queryPreview)) {
-    await openCustomPreview(queryPreview);
-  } else if ((queryMode === 'docs' || (!queryConv && savedMode === 'docs')) && state.customPreviews.length > 0) {
-    const targetDoc = state.customPreviews.some((d) => d.id === savedPreview) ? savedPreview : state.customPreviews[0].id;
-    await openCustomPreview(targetDoc);
-  } else if (queryMode === 'docs') {
-    el('mode-docs-btn')?.click();
-  } else if (queryConv) {
-    await openConversation(queryConv);
-  } else if (state.conversations.length > 0) {
-    await openConversation(state.conversations[0].id);
-  } else if (state.customPreviews.length > 0) {
-    await openCustomPreview(state.customPreviews[0].id);
-  } else {
-    connectSSE();
+  const auth = await checkAuthStatus();
+  if (auth.authRequired && !auth.authenticated) {
+    showAuthLockOverlay();
+    return;
   }
+
+  await loadInitialWorkspaceContent();
 }
 
 bootstrap();

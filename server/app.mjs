@@ -1,7 +1,6 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -15,6 +14,7 @@ import {
   resolveTranscriptPath,
 } from './transcript.mjs';
 import { CustomPreviewStore } from './custom-preview.mjs';
+import { PreviewAuthManager } from './auth.mjs';
 
 const HERE = resolve(fileURLToPath(import.meta.url), '..');
 const PUBLIC_DIR = resolve(HERE, '..', 'public');
@@ -25,6 +25,8 @@ const MIME_TYPES = {
   '.mjs': 'application/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.csv': 'text/csv; charset=utf-8',
+  '.tsv': 'text/tab-separated-values; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -35,12 +37,32 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon',
   '.avif': 'image/avif',
   '.pdf': 'application/pdf',
+  '.mp4': 'video/mp4',
+  '.m4v': 'video/mp4',
+  '.webm': 'video/webm',
+  '.mov': 'video/quicktime',
+  '.ogv': 'video/ogg',
+  '.mkv': 'video/x-matroska',
+  '.avi': 'video/x-msvideo',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.flac': 'audio/flac',
+  '.ogg': 'audio/ogg',
+  '.oga': 'audio/ogg',
+  '.m4a': 'audio/mp4',
+  '.aac': 'audio/aac',
+  '.opus': 'audio/opus',
+  '.weba': 'audio/webm',
   '.woff2': 'font/woff2',
   '.woff': 'font/woff',
   '.ttf': 'font/ttf',
 };
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.avif']);
+const PDF_EXTS = new Set(['.pdf']);
+const VIDEO_EXTS = new Set(['.mp4', '.webm', '.mov', '.m4v', '.ogv', '.mkv', '.avi']);
+const AUDIO_EXTS = new Set(['.mp3', '.wav', '.flac', '.ogg', '.oga', '.m4a', '.aac', '.opus', '.weba']);
+const CSV_EXTS = new Set(['.csv', '.tsv']);
 const MARKDOWN_EXTS = new Set(['.md', '.markdown', '.mdx']);
 const TEXT_CODE_EXTS = new Set([
   '.py', '.pyi', '.ipynb', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx',
@@ -50,7 +72,7 @@ const TEXT_CODE_EXTS = new Set([
   '.json', '.jsonl', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.properties',
   '.xml', '.html', '.htm', '.css', '.scss', '.less', '.vue', '.svelte',
   '.sql', '.graphql', '.proto', '.cmake', '.gradle', '.dockerfile', '.makefile',
-  '.txt', '.log', '.csv', '.tsv', '.tex', '.bib', '.rst', '.gitignore', '.editorconfig',
+  '.txt', '.log', '.tex', '.bib', '.rst', '.gitignore', '.editorconfig',
 ]);
 
 const EXT_TO_LANG = {
@@ -62,7 +84,7 @@ const EXT_TO_LANG = {
   '.sh': 'bash', '.bash': 'bash', '.zsh': 'bash', '.ps1': 'powershell', '.bat': 'dos', '.cmd': 'dos',
   '.json': 'json', '.jsonl': 'json', '.yaml': 'yaml', '.yml': 'yaml', '.toml': 'ini', '.ini': 'ini',
   '.xml': 'xml', '.html': 'xml', '.css': 'css', '.scss': 'scss', '.sql': 'sql',
-  '.cmake': 'cmake', '.tex': 'latex', '.md': 'markdown',
+  '.cmake': 'cmake', '.tex': 'latex', '.md': 'markdown', '.csv': 'plaintext', '.tsv': 'plaintext',
 };
 
 const BLOCKED_PATH_SEGMENTS = [
@@ -73,11 +95,12 @@ const BLOCKED_PATH_SEGMENTS = [
   /^\/etc\/(?:shadow|passwd|sudoers)/i,
 ];
 
-function sendJson(res, status, data) {
+function sendJson(res, status, data, extraHeaders = {}) {
   const body = JSON.stringify(data);
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
+    ...extraHeaders,
   });
   res.end(body);
 }
@@ -185,7 +208,7 @@ function findBareFileUnderRoot(rootDir, bareName) {
   return '';
 }
 
-export function resolveSafeFilePath(rawPath, baseDir = '') {
+export function resolveSafeFilePath(rawPath, baseDir = '', { allowDirectory = false } = {}) {
   const { filePart, hashPart } = normalizeIncomingFilePath(rawPath);
   if (!filePart) return { error: 'Empty path', status: 400 };
 
@@ -200,7 +223,6 @@ export function resolveSafeFilePath(rawPath, baseDir = '') {
       resolvedCleanBase = resolve(cleanBase);
       candidates.push(resolve(resolvedCleanBase, filePart));
 
-      // Also check ancestor git repo root if baseDir is a subfolder like `docs/`
       let anc = resolvedCleanBase;
       for (let i = 0; i < 3; i++) {
         const parent = dirname(anc);
@@ -220,7 +242,6 @@ export function resolveSafeFilePath(rawPath, baseDir = '') {
 
   let chosen = candidates.find((c) => existsSync(c)) || '';
 
-  // Fallback for bare filename links (e.g. `pce_contracts.py#L1390-L1600`) inside a project subdirectory
   if (!chosen && resolvedCleanBase && !/[\\/]/.test(filePart) && existsSync(resolvedCleanBase)) {
     chosen = findBareFileUnderRoot(resolvedCleanBase, filePart);
   }
@@ -241,8 +262,10 @@ export function resolveSafeFilePath(rawPath, baseDir = '') {
 
   try {
     const st = statSync(chosen);
-    // If link points to a directory (e.g. `isaacgymenvs/`), resolve to its README.md if present
     if (st.isDirectory()) {
+      if (allowDirectory) {
+        return { resolvedPath: chosen, hashPart, isDirectory: true, status: 200 };
+      }
       const readme = ['README.md', 'readme.md', 'index.md'].map((n) => join(chosen, n)).find((p) => existsSync(p));
       if (readme) {
         chosen = readme;
@@ -254,14 +277,18 @@ export function resolveSafeFilePath(rawPath, baseDir = '') {
     return { error: err.message, status: 500 };
   }
 
-  return { resolvedPath: chosen, hashPart, status: 200 };
+  return { resolvedPath: chosen, hashPart, isDirectory: false, status: 200 };
 }
 
-function classifyFile(filePath) {
+export function classifyFile(filePath) {
   const ext = extname(filePath).toLowerCase();
   const base = basename(filePath).toLowerCase();
   if (MARKDOWN_EXTS.has(ext)) return { kind: 'markdown', ext, lang: 'markdown' };
   if (IMAGE_EXTS.has(ext)) return { kind: 'image', ext, lang: '' };
+  if (PDF_EXTS.has(ext)) return { kind: 'pdf', ext, lang: '' };
+  if (VIDEO_EXTS.has(ext)) return { kind: 'video', ext, lang: '' };
+  if (AUDIO_EXTS.has(ext)) return { kind: 'audio', ext, lang: '' };
+  if (CSV_EXTS.has(ext)) return { kind: 'csv', ext, lang: ext === '.tsv' ? 'tsv' : 'csv' };
   if (TEXT_CODE_EXTS.has(ext) || ['dockerfile', 'makefile', 'cmakelists.txt', 'license', 'readme'].includes(base)) {
     return { kind: 'code', ext, lang: EXT_TO_LANG[ext] || (base === 'cmakelists.txt' ? 'cmake' : 'plaintext') };
   }
@@ -298,12 +325,77 @@ export function spawnAppWindow(url) {
   return { launchedWith: opener, mode: 'browser' };
 }
 
-export function createPreviewEngine({ onExtraRoute, tokenValidator, storePersistPath } = {}) {
+function parseByteRangeHeader(rangeHeader, totalSize) {
+  if (!rangeHeader || typeof rangeHeader !== 'string' || !rangeHeader.startsWith('bytes=')) {
+    return null;
+  }
+  if (totalSize <= 0) return { invalid: true };
+  const spec = rangeHeader.slice(6).split(',')[0].trim();
+  const dashIdx = spec.indexOf('-');
+  if (dashIdx === -1) return { invalid: true };
+
+  const startStr = spec.slice(0, dashIdx).trim();
+  const endStr = spec.slice(dashIdx + 1).trim();
+
+  let start;
+  let end;
+  if (startStr === '') {
+    const suffixLen = Number(endStr);
+    if (!Number.isFinite(suffixLen) || suffixLen <= 0) return { invalid: true };
+    start = Math.max(0, totalSize - suffixLen);
+    end = totalSize - 1;
+  } else {
+    start = Number(startStr);
+    end = endStr === '' ? totalSize - 1 : Number(endStr);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= totalSize) {
+      return { invalid: true };
+    }
+    end = Math.min(totalSize - 1, end);
+    if (end < start) return { invalid: true };
+  }
+  return { start, end };
+}
+
+function revealOnWindowsExplorer(targetPath, isDirectory) {
+  const winPath = targetPath.replace(/\//g, '\\');
+  const psCmd = [
+    `$p = $env:AMP_REVEAL_PATH`,
+    `if ($env:AMP_IS_DIR -eq '1') { Start-Process explorer.exe -ArgumentList ('"' + $p + '"') }`,
+    `else { Start-Process explorer.exe -ArgumentList ('/select,"' + $p + '"') }`,
+    `Start-Sleep -Milliseconds 180`,
+    `try {`,
+    `  $ws = New-Object -ComObject WScript.Shell`,
+    `  $folderLeaf = if ($env:AMP_IS_DIR -eq '1') { Split-Path $p -Leaf } else { Split-Path (Split-Path $p -Parent) -Leaf }`,
+    `  if ($folderLeaf) { [void]$ws.AppActivate($folderLeaf) }`,
+    `} catch {}`,
+  ].join('; ');
+
+  const child = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', psCmd], {
+    detached: true,
+    windowsHide: true,
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      AMP_REVEAL_PATH: winPath,
+      AMP_IS_DIR: isDirectory ? '1' : '0',
+    },
+  });
+  child.unref();
+}
+
+export function createPreviewEngine({
+  onExtraRoute,
+  tokenValidator,
+  storePersistPath,
+  authPersistPath,
+} = {}) {
   const reader = new TranscriptReader();
   const customStore = new CustomPreviewStore(storePersistPath !== undefined ? { persistPath: storePersistPath } : {});
+  const authManager = new PreviewAuthManager(authPersistPath !== undefined ? { persistPath: authPersistPath } : {});
   const btwNotesPath = customStore.persistPath ? join(dirname(customStore.persistPath), 'btw-notes.json') : '';
-  const btwNotesByConv = new Map(); // convId -> [{ id, question, answer, createdAt }]
+  const btwNotesByConv = new Map();
   let btwNotesMtimeMs = 0;
+
   const loadBtwNotesFromDisk = () => {
     if (!btwNotesPath || !existsSync(btwNotesPath)) return;
     try {
@@ -320,6 +412,7 @@ export function createPreviewEngine({ onExtraRoute, tokenValidator, storePersist
     } catch {}
   };
   loadBtwNotesFromDisk();
+
   const saveBtwNotes = () => {
     if (!btwNotesPath) return;
     try {
@@ -328,9 +421,10 @@ export function createPreviewEngine({ onExtraRoute, tokenValidator, storePersist
       btwNotesMtimeMs = statSync(btwNotesPath).mtimeMs;
     } catch {}
   };
-  const sseClients = new Set(); // { res, convId, previewId }
-  const watchers = new Map(); // key -> { watcher, timer, refs }
-  const liveHookStates = new Map(); // convId -> { phase, toolName, detail, updatedAt }
+
+  const sseClients = new Set();
+  const watchers = new Map();
+  const liveHookStates = new Map();
 
   function broadcastEvent(eventName, payload, filterFn = null) {
     const frame = `event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`;
@@ -366,9 +460,7 @@ export function createPreviewEngine({ onExtraRoute, tokenValidator, storePersist
             },
             (c) => !c.convId || c.convId === convId
           );
-        } catch {
-          // Ignore transient partial write
-        }
+        } catch {}
       };
 
       try {
@@ -376,10 +468,13 @@ export function createPreviewEngine({ onExtraRoute, tokenValidator, storePersist
           if (timer) clearTimeout(timer);
           timer = setTimeout(emitUpdate, 90);
         });
+        watcher.on('error', () => {
+          if (timer) clearTimeout(timer);
+          watchers.delete(tPath);
+          try { watcher.close(); } catch {}
+        });
         watchers.set(tPath, { watcher, timer, kind: 'transcript', convId });
-      } catch {
-        // Fallback polling handled by heartbeat if watch unsupported
-      }
+      } catch {}
     }
     return { ...resolved, transcriptPath: tPath };
   }
@@ -401,10 +496,13 @@ export function createPreviewEngine({ onExtraRoute, tokenValidator, storePersist
           }
         }, 120);
       });
+      watcher.on('error', () => {
+        if (timer) clearTimeout(timer);
+        watchers.delete(filePath);
+        try { watcher.close(); } catch {}
+      });
       watchers.set(filePath, { watcher, timer, kind: 'custom', previewId });
-    } catch {
-      // Ignore
-    }
+    } catch {}
   }
 
   const heartbeat = setInterval(() => {
@@ -431,8 +529,79 @@ export function createPreviewEngine({ onExtraRoute, tokenValidator, storePersist
       return sendJson(res, 401, { error: 'Unauthorized: invalid sidecar token' });
     }
 
+    const authStatus = authManager.getStatus();
+
     if (req.method === 'GET' && pathname === '/api/health') {
-      return sendJson(res, 200, { ok: true, pid: process.pid, clients: sseClients.size });
+      return sendJson(res, 200, {
+        ok: true,
+        pid: process.pid,
+        clients: sseClients.size,
+        authRequired: authStatus.authRequired,
+      });
+    }
+
+    if (req.method === 'GET' && pathname === '/api/auth/status') {
+      const isAuthed = Boolean(tokenValidator) || authManager.isRequestAuthenticated(req, url);
+      return sendJson(res, 200, {
+        authRequired: authStatus.authRequired,
+        enabled: authStatus.enabled,
+        hasPassword: authStatus.hasPassword,
+        authenticated: isAuthed,
+      });
+    }
+
+    if (req.method === 'POST' && pathname === '/api/auth/login') {
+      const remoteKey = req.socket?.remoteAddress || 'local';
+      const limitCheck = authManager.checkRateLimit(remoteKey);
+      if (!limitCheck.allowed) {
+        return sendJson(res, 429, { error: `Too many login attempts. Retry in ${limitCheck.retryAfterSec}s.` });
+      }
+      try {
+        const body = await readJsonBody(req, 16 * 1024);
+        const ok = authManager.verifyPassword(body.password || '');
+        authManager.recordLoginAttempt(remoteKey, ok);
+        if (!ok) {
+          return sendJson(res, 401, { error: 'Invalid password', authenticated: false });
+        }
+        const sessionToken = authManager.createSessionToken();
+        return sendJson(
+          res,
+          200,
+          { ok: true, authenticated: true, token: sessionToken },
+          { 'Set-Cookie': authManager.buildSetCookieHeader(sessionToken) }
+        );
+      } catch (err) {
+        return sendJson(res, 400, { error: err.message });
+      }
+    }
+
+    if (req.method === 'POST' && pathname === '/api/auth/logout') {
+      return sendJson(
+        res,
+        200,
+        { ok: true, authenticated: false },
+        { 'Set-Cookie': authManager.buildClearCookieHeader() }
+      );
+    }
+
+    // Enforce password authentication on all remaining /api/* routes in standalone mode
+    if (pathname.startsWith('/api/') && !tokenValidator) {
+      if (!authManager.isRequestAuthenticated(req, url)) {
+        return sendJson(res, 401, { error: 'Authentication required', authRequired: true });
+      }
+    }
+
+    if (req.method === 'POST' && pathname === '/api/auth/reload') {
+      authManager.syncFromDisk();
+      const updated = authManager.getStatus();
+      broadcastEvent('auth', { authRequired: updated.authRequired });
+      if (updated.authRequired) {
+        for (const client of sseClients) {
+          try { client.res.end(); } catch {}
+        }
+        sseClients.clear();
+      }
+      return sendJson(res, 200, { ok: true, ...updated });
     }
 
     if (req.method === 'GET' && pathname === '/api/flavors') {
@@ -534,31 +703,31 @@ export function createPreviewEngine({ onExtraRoute, tokenValidator, storePersist
     if (req.method === 'POST' && pathname === '/api/reveal-in-folder') {
       try {
         const body = await readJsonBody(req);
-        const check = resolveSafeFilePath(body.path || '', body.base || '');
+        const check = resolveSafeFilePath(body.path || '', body.base || '', { allowDirectory: true });
         if (check.error) {
           return sendJson(res, check.status || 400, { error: check.error });
         }
         const resolvedPath = check.resolvedPath;
-        const folderPath = dirname(resolvedPath);
+        const folderPath = check.isDirectory ? resolvedPath : dirname(resolvedPath);
         if (!body.dryRun) {
           if (process.platform === 'win32') {
-            const child = spawn('explorer.exe', [`/select,${resolvedPath}`], { detached: true, stdio: 'ignore' });
-            child.unref();
+            revealOnWindowsExplorer(resolvedPath, Boolean(check.isDirectory));
           } else if (process.platform === 'darwin') {
-            const child = spawn('open', ['-R', resolvedPath], { detached: true, stdio: 'ignore' });
+            const args = check.isDirectory ? [resolvedPath] : ['-R', resolvedPath];
+            const child = spawn('open', args, { detached: true, stdio: 'ignore' });
             child.unref();
           } else {
             const child = spawn('xdg-open', [folderPath], { detached: true, stdio: 'ignore' });
             child.unref();
           }
         }
-        return sendJson(res, 200, { ok: true, path: resolvedPath, folder: folderPath });
+        return sendJson(res, 200, { ok: true, path: resolvedPath, folder: folderPath, isDirectory: Boolean(check.isDirectory) });
       } catch (err) {
         return sendJson(res, 500, { error: err.message });
       }
     }
 
-    // Rich file metadata + content endpoint for Side Preview Pane (supports relative paths!)
+    // Rich file metadata + content endpoint for Popup Modal & Side Preview Pane
     if (req.method === 'GET' && pathname === '/api/file-info') {
       const targetPath = url.searchParams.get('path') || '';
       const baseDir = url.searchParams.get('base') || '';
@@ -569,6 +738,7 @@ export function createPreviewEngine({ onExtraRoute, tokenValidator, storePersist
       try {
         const st = statSync(check.resolvedPath);
         const info = classifyFile(check.resolvedPath);
+        const rawUrl = `/api/raw-file?path=${encodeURIComponent(check.resolvedPath)}`;
         const result = {
           path: check.resolvedPath,
           filename: basename(check.resolvedPath),
@@ -578,12 +748,11 @@ export function createPreviewEngine({ onExtraRoute, tokenValidator, storePersist
           kind: info.kind,
           lang: info.lang,
           ext: info.ext,
+          rawUrl,
         };
-        if (info.kind === 'image') {
-          result.rawUrl = `/api/raw-file?path=${encodeURIComponent(check.resolvedPath)}`;
+        if (info.kind === 'image' || info.kind === 'pdf' || info.kind === 'video' || info.kind === 'audio') {
           return sendJson(res, 200, result);
         }
-        // Read text content up to 2 MB; also sniff UTF-8 for unknown extension text files
         if (st.size <= 2 * 1024 * 1024) {
           const buf = readFileSync(check.resolvedPath);
           const isBinary = buf.subarray(0, Math.min(buf.length, 4096)).includes(0);
@@ -596,7 +765,13 @@ export function createPreviewEngine({ onExtraRoute, tokenValidator, storePersist
         } else {
           result.truncated = true;
           const buf = readFileSync(check.resolvedPath).subarray(0, 512 * 1024);
-          result.content = buf.toString('utf-8');
+          const isBinary = buf.subarray(0, Math.min(buf.length, 4096)).includes(0);
+          if (!isBinary) {
+            result.kind = info.kind === 'unknown' ? 'code' : info.kind;
+            result.content = buf.toString('utf-8');
+          } else {
+            result.kind = 'binary';
+          }
         }
         return sendJson(res, 200, result);
       } catch (err) {
@@ -604,8 +779,8 @@ export function createPreviewEngine({ onExtraRoute, tokenValidator, storePersist
       }
     }
 
-    // Binary-safe raw file & image endpoint (supports relative paths + baseDir)
-    if (req.method === 'GET' && (pathname === '/api/raw-file' || pathname === '/api/file')) {
+    // Streaming raw file & media endpoint with HTTP Range (206 Partial Content) support for video/audio/PDF
+    if ((req.method === 'GET' || req.method === 'HEAD') && (pathname === '/api/raw-file' || pathname === '/api/file')) {
       const targetPath = url.searchParams.get('path') || '';
       const baseDir = url.searchParams.get('base') || '';
       const check = resolveSafeFilePath(targetPath, baseDir);
@@ -613,16 +788,61 @@ export function createPreviewEngine({ onExtraRoute, tokenValidator, storePersist
         return sendJson(res, check.status || 400, { error: check.error });
       }
       try {
+        const st = statSync(check.resolvedPath);
+        const totalSize = st.size;
         const ext = extname(check.resolvedPath).toLowerCase();
         const contentType = pathname === '/api/file'
           ? 'text/plain; charset=utf-8'
           : (MIME_TYPES[ext] || 'application/octet-stream');
-        const buf = readFileSync(check.resolvedPath);
-        res.writeHead(200, {
+        const encodedName = encodeURIComponent(basename(check.resolvedPath));
+        const baseHeaders = {
           'Content-Type': contentType,
+          'Accept-Ranges': 'bytes',
           'Cache-Control': 'no-cache',
+          'Content-Disposition': `inline; filename*=UTF-8''${encodedName}`,
+        };
+
+        const rangeReq = parseByteRangeHeader(req.headers.range, totalSize);
+        if (rangeReq?.invalid) {
+          res.writeHead(416, {
+            ...baseHeaders,
+            'Content-Range': `bytes */${totalSize}`,
+          });
+          res.end();
+          return;
+        }
+
+        if (rangeReq) {
+          const { start, end } = rangeReq;
+          const chunkLen = end - start + 1;
+          res.writeHead(206, {
+            ...baseHeaders,
+            'Content-Range': `bytes ${start}-${end}/${totalSize}`,
+            'Content-Length': chunkLen,
+          });
+          if (req.method === 'HEAD') {
+            res.end();
+            return;
+          }
+          const stream = createReadStream(check.resolvedPath, { start, end });
+          req.on('close', () => stream.destroy());
+          stream.on('error', () => { if (!res.headersSent) res.writeHead(500); res.end(); });
+          stream.pipe(res);
+          return;
+        }
+
+        res.writeHead(200, {
+          ...baseHeaders,
+          'Content-Length': totalSize,
         });
-        res.end(buf);
+        if (req.method === 'HEAD') {
+          res.end();
+          return;
+        }
+        const stream = createReadStream(check.resolvedPath);
+        req.on('close', () => stream.destroy());
+        stream.on('error', () => { if (!res.headersSent) res.writeHead(500); res.end(); });
+        stream.pipe(res);
         return;
       } catch (err) {
         return sendJson(res, 500, { error: err.message });
@@ -668,20 +888,47 @@ export function createPreviewEngine({ onExtraRoute, tokenValidator, storePersist
       }
     }
 
-    // Native OS file picker for exact path selection on Windows
+    // Native OS file picker (Windows TopMost WinForms, macOS osascript, Linux zenity)
     if (req.method === 'POST' && pathname === '/api/pick-file') {
-      if (process.platform !== 'win32') {
-        return sendJson(res, 400, { error: 'Native file dialog is only supported on Windows' });
-      }
       try {
-        const psScript = `Add-Type -AssemblyName System.Windows.Forms; $dlg = New-Object System.Windows.Forms.OpenFileDialog; $dlg.Filter = 'Markdown & Logs (*.md;*.markdown;*.jsonl;*.txt)|*.md;*.markdown;*.jsonl;*.txt|All Files (*.*)|*.*'; $dlg.Title = 'Select File to Preview'; if ($dlg.ShowDialog() -eq 'OK') { Write-Output $dlg.FileName }`;
-        const selectedPath = await new Promise((resolvePick, rejectPick) => {
-          const child = spawn('powershell.exe', ['-NoProfile', '-STA', '-Command', psScript], { windowsHide: true });
-          let out = '';
-          child.stdout.on('data', (c) => { out += c.toString('utf-8'); });
-          child.on('error', rejectPick);
-          child.on('close', () => resolvePick(out.trim()));
-        });
+        let selectedPath = '';
+        if (process.platform === 'win32') {
+          const psScript = [
+            `Add-Type -AssemblyName System.Windows.Forms`,
+            `$top = New-Object System.Windows.Forms.Form`,
+            `$top.TopMost = $true`,
+            `$top.ShowInTaskbar = $false`,
+            `$top.Opacity = 0`,
+            `$dlg = New-Object System.Windows.Forms.OpenFileDialog`,
+            `$dlg.Filter = 'Docs & Media (*.md;*.markdown;*.pdf;*.mp4;*.webm;*.mov;*.mp3;*.wav;*.png;*.jpg;*.svg;*.csv;*.jsonl;*.txt)|*.md;*.markdown;*.pdf;*.mp4;*.webm;*.mov;*.mp3;*.wav;*.png;*.jpg;*.jpeg;*.svg;*.csv;*.jsonl;*.txt|All Files (*.*)|*.*'`,
+            `$dlg.Title = 'Select File to Preview'`,
+            `if ($dlg.ShowDialog($top) -eq 'OK') { Write-Output $dlg.FileName }`,
+            `$top.Dispose()`,
+          ].join('; ');
+          selectedPath = await new Promise((resolvePick, rejectPick) => {
+            const child = spawn('powershell.exe', ['-NoProfile', '-STA', '-Command', psScript], { windowsHide: true });
+            let out = '';
+            child.stdout.on('data', (c) => { out += c.toString('utf-8'); });
+            child.on('error', rejectPick);
+            child.on('close', () => resolvePick(out.trim()));
+          });
+        } else if (process.platform === 'darwin') {
+          selectedPath = await new Promise((resolvePick, rejectPick) => {
+            const child = spawn('osascript', ['-e', 'POSIX path of (choose file with prompt "Select File to Preview")']);
+            let out = '';
+            child.stdout.on('data', (c) => { out += c.toString('utf-8'); });
+            child.on('error', rejectPick);
+            child.on('close', (code) => resolvePick(code === 0 ? out.trim() : ''));
+          });
+        } else {
+          selectedPath = await new Promise((resolvePick) => {
+            const child = spawn('zenity', ['--file-selection', '--title=Select File to Preview']);
+            let out = '';
+            child.stdout.on('data', (c) => { out += c.toString('utf-8'); });
+            child.on('error', () => resolvePick(''));
+            child.on('close', (code) => resolvePick(code === 0 ? out.trim() : ''));
+          });
+        }
         if (!selectedPath) {
           return sendJson(res, 200, { canceled: true });
         }
@@ -853,11 +1100,16 @@ export function createPreviewEngine({ onExtraRoute, tokenValidator, storePersist
     sseClients.clear();
   }
 
-  return { handleRequest, close, customStore, reader };
+  return { handleRequest, close, customStore, authManager, reader };
 }
 
-export function startStandaloneServer({ port = 0, host = '127.0.0.1', storePersistPath } = {}) {
-  const engine = createPreviewEngine({ storePersistPath });
+export function startStandaloneServer({
+  port = 0,
+  host = '127.0.0.1',
+  storePersistPath,
+  authPersistPath,
+} = {}) {
+  const engine = createPreviewEngine({ storePersistPath, authPersistPath });
   const server = createServer((req, res) => {
     engine.handleRequest(req, res).catch((err) => {
       if (!res.headersSent) {
@@ -877,7 +1129,9 @@ export function startStandaloneServer({ port = 0, host = '127.0.0.1', storePersi
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
   const portArgIdx = process.argv.indexOf('--port');
+  const hostArgIdx = process.argv.indexOf('--host');
   const port = portArgIdx !== -1 ? Number(process.argv[portArgIdx + 1]) || 0 : (Number(process.env.PREVIEW_PORT) || 0);
-  const { port: boundPort } = await startStandaloneServer({ port });
-  console.log(`[agy-session-preview] listening on http://127.0.0.1:${boundPort}`);
+  const host = hostArgIdx !== -1 ? (process.argv[hostArgIdx + 1] || '127.0.0.1') : (process.env.PREVIEW_HOST || '127.0.0.1');
+  const { port: boundPort } = await startStandaloneServer({ port, host });
+  console.log(`[agy-session-preview] listening on http://${host}:${boundPort}`);
 }

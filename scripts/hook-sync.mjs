@@ -26,6 +26,21 @@ function getLegacyDocsDataDir() {
   return resolveOsDataDir('agy-markdown-preview');
 }
 
+function readLocalCliToken() {
+  for (const dir of [getDocsDataDir(), getLegacyDocsDataDir()]) {
+    if (!dir) continue;
+    try {
+      const authPath = join(dir, 'auth-config.json');
+      if (!existsSync(authPath)) continue;
+      const parsed = JSON.parse(readFileSync(authPath, 'utf-8'));
+      if (typeof parsed?.cliToken === 'string' && parsed.cliToken) {
+        return parsed.cliToken;
+      }
+    } catch {}
+  }
+  return '';
+}
+
 function readStdinSyncFast() {
   return new Promise((resolveRead) => {
     const chunks = [];
@@ -62,10 +77,6 @@ function readTailUtf8(filePath, maxBytes = 24576) {
   }
 }
 
-/**
- * Antigravity CLI `/btw <question>` forks a temporary conversation that gets deleted right after answering.
- * Capture its final Markdown answer + tool summary during PostInvocation / Stop before teardown!
- */
 function tryCaptureBtwSideAnswer(payload) {
   try {
     const forkConvId = payload?.conversationId || '';
@@ -76,7 +87,6 @@ function tryCaptureBtwSideAnswer(payload) {
     const actualTPath = existsSync(fullTPath) ? fullTPath : (existsSync(rawTPath) ? rawTPath : '');
     if (!actualTPath) return null;
 
-    // Infer flavor root (e.g. ~/.gemini/antigravity-cli) from transcriptPath
     const brainIdx = actualTPath.toLowerCase().indexOf(`${process.platform === 'win32' ? '\\brain\\' : '/brain/'}`);
     const flavorRoot = brainIdx !== -1
       ? actualTPath.slice(0, brainIdx)
@@ -114,7 +124,6 @@ function tryCaptureBtwSideAnswer(payload) {
       .filter(Boolean);
     if (steps.length === 0) return null;
 
-    // Find the last USER_INPUT step in the fork
     let lastUserIdx = -1;
     for (let i = steps.length - 1; i >= 0; i--) {
       if (steps[i].type === 'USER_INPUT' || steps[i].source === 'USER_EXPLICIT') {
@@ -176,9 +185,16 @@ function tryCaptureBtwSideAnswer(payload) {
   }
 }
 
-function forwardToServer(port, payloadObj) {
+function forwardToServer(port, payloadObj, cliToken = '') {
   return new Promise((resolveReq) => {
     const payloadRaw = typeof payloadObj === 'string' ? payloadObj : JSON.stringify(payloadObj);
+    const headers = {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(payloadRaw),
+    };
+    if (cliToken) {
+      headers['X-Preview-Cli-Token'] = cliToken;
+    }
     const req = httpRequest(
       {
         hostname: '127.0.0.1',
@@ -186,10 +202,7 @@ function forwardToServer(port, payloadObj) {
         path: '/api/hook-event',
         method: 'POST',
         timeout: 250,
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(payloadRaw),
-        },
+        headers,
       },
       (res) => {
         res.resume();
@@ -222,13 +235,14 @@ async function main() {
     if (activeServerJson) {
       const info = JSON.parse(readFileSync(activeServerJson, 'utf-8'));
       if (info?.port) {
-        await forwardToServer(info.port, raw);
+        const cliToken = readLocalCliToken();
+        await forwardToServer(info.port, raw, cliToken);
         if (capturedBtw) {
           await forwardToServer(info.port, {
             hookEventName: 'BtwCaptured',
             conversationId: capturedBtw.parentConvId,
             btwEntry: capturedBtw.entry,
-          });
+          }, cliToken);
         }
       }
     }

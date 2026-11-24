@@ -6,6 +6,7 @@ import { createServer as createNetServer } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PreviewAuthManager } from '../server/auth.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = resolve(HERE, '..');
@@ -19,22 +20,31 @@ const DEFAULT_PORT = 19420;
 
 function printHelp() {
   console.log(`Usage: agy-preview [file] [options]
+       agy-preview password <set <pwd> | cancel | clear | disable | activate [pwd] | print>
 
 Options:
-  -c, --conv <id>       Preview a specific Antigravity conversation ID
-  -f, --file <path>     Preview and live-watch a Markdown / JSONL / text file
-  -t, --title <title>   Custom title for file or stdin preview
-  -m, --mode <mode>     Parse mode: auto | markdown | stream-json (default: auto)
-  -p, --port <port>     Preferred local server port (default: 19420)
-      --flavor <name>   Antigravity flavor (default: antigravity-cli)
-      --stdin           Read Markdown, CLI text, or stream-json from stdin
-      --open            Open or focus preview window (enabled by default)
-      --no-open         Start/sync server without opening a window
-      --new-window      Always open a new standalone app window
-      --foreground      Keep server in foreground (used by daemon mode)
-      --status          Show running background preview server status
-      --stop            Stop the background preview server
-  -h, --help            Show this help message`);
+  -c, --conv <id>              Preview a specific Antigravity conversation ID
+  -f, --file <path>            Preview and live-watch a Markdown / PDF / Video / JSONL file
+  -t, --title <title>          Custom title for file or stdin preview
+  -m, --mode <mode>            Parse mode: auto | markdown | stream-json (default: auto)
+  -p, --port <port>            Preferred local server port (default: 19420)
+      --host <host>            Bind host address (default: 127.0.0.1; use 0.0.0.0 on servers)
+      --flavor <name>          Antigravity flavor (default: antigravity-cli)
+      --stdin                  Read Markdown, CLI text, or stream-json from stdin
+      --open                   Open or focus preview window (enabled by default)
+      --no-open                Start/sync server without opening a window
+      --new-window             Always open a new standalone app window
+      --foreground             Keep server in foreground (used by daemon mode)
+      --status                 Show running background preview server status
+      --stop                   Stop the background preview server
+
+Password Security (for remote / shared servers, disabled by default):
+      --set-password <pwd>     Set and immediately activate frontend password protection
+      --cancel-password        Cancel and clear the stored password (alias: --clear-password)
+      --disable-password       Temporarily deactivate password check (keeps saved password)
+      --activate-password [pw] Activate password protection (uses saved password, [pw], or generates one)
+      --print-password         Print current password status and plaintext password
+  -h, --help                   Show this help message`);
 }
 
 function parseArgs(argv) {
@@ -44,6 +54,7 @@ function parseArgs(argv) {
     file: '',
     title: '',
     mode: 'auto',
+    host: '',
     open: true,
     newWindow: false,
     foreground: false,
@@ -52,7 +63,30 @@ function parseArgs(argv) {
     stdin: false,
     help: false,
     port: 0,
+    passwordCmd: '',
+    passwordVal: '',
   };
+
+  if (argv[0] === 'password' || argv[0] === 'auth') {
+    const sub = (argv[1] || 'print').toLowerCase();
+    if (sub === 'set') {
+      opts.passwordCmd = 'set';
+      opts.passwordVal = argv[2] || '';
+    } else if (sub === 'cancel' || sub === 'clear' || sub === 'unset' || sub === 'remove') {
+      opts.passwordCmd = 'clear';
+    } else if (sub === 'disable' || sub === 'off' || sub === 'deactivate') {
+      opts.passwordCmd = 'disable';
+    } else if (sub === 'activate' || sub === 'enable' || sub === 'on') {
+      opts.passwordCmd = 'activate';
+      opts.passwordVal = argv[2] && !argv[2].startsWith('-') ? argv[2] : '';
+    } else if (sub === 'print' || sub === 'show' || sub === 'status' || sub === 'get') {
+      opts.passwordCmd = 'print';
+    } else {
+      opts.help = true;
+    }
+    return opts;
+  }
+
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') opts.help = true;
@@ -62,6 +96,7 @@ function parseArgs(argv) {
     else if (a === '--title' || a === '-t') opts.title = argv[++i] || '';
     else if (a === '--mode' || a === '-m') opts.mode = argv[++i] || 'auto';
     else if (a === '--port' || a === '-p') opts.port = Number(argv[++i]) || 0;
+    else if (a === '--host') opts.host = argv[++i] || '';
     else if (a === '--open') opts.open = true;
     else if (a === '--no-open') opts.open = false;
     else if (a === '--new-window') opts.newWindow = true;
@@ -69,14 +104,38 @@ function parseArgs(argv) {
     else if (a === '--stop') opts.stop = true;
     else if (a === '--status') opts.status = true;
     else if (a === '--stdin') opts.stdin = true;
-    else if (!a.startsWith('-') && !opts.file) opts.file = a;
+    else if (a === '--set-password') {
+      opts.passwordCmd = 'set';
+      opts.passwordVal = argv[++i] || '';
+    } else if (a === '--cancel-password' || a === '--clear-password' || a === '--unset-password') {
+      opts.passwordCmd = 'clear';
+    } else if (a === '--disable-password') {
+      opts.passwordCmd = 'disable';
+    } else if (a === '--activate-password' || a === '--enable-password') {
+      opts.passwordCmd = 'activate';
+      if (argv[i + 1] && !argv[i + 1].startsWith('-')) {
+        opts.passwordVal = argv[++i];
+      }
+    } else if (a === '--print-password' || a === '--show-password') {
+      opts.passwordCmd = 'print';
+    } else if (!a.startsWith('-') && !opts.file) {
+      opts.file = a;
+    }
   }
   return opts;
 }
 
-function httpJson(port, path, method = 'GET', body = null, timeoutMs = 1500) {
+function httpJson(port, path, method = 'GET', body = null, timeoutMs = 1500, cliToken = '') {
   return new Promise((resolveReq, rejectReq) => {
     const payload = body ? JSON.stringify(body) : null;
+    const headers = {};
+    if (payload) {
+      headers['Content-Type'] = 'application/json';
+      headers['Content-Length'] = Buffer.byteLength(payload);
+    }
+    if (cliToken) {
+      headers['X-Preview-Cli-Token'] = cliToken;
+    }
     const req = httpRequest(
       {
         hostname: '127.0.0.1',
@@ -84,9 +143,7 @@ function httpJson(port, path, method = 'GET', body = null, timeoutMs = 1500) {
         path,
         method,
         timeout: timeoutMs,
-        headers: payload
-          ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }
-          : undefined,
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
       },
       (res) => {
         const chunks = [];
@@ -110,7 +167,7 @@ function httpJson(port, path, method = 'GET', body = null, timeoutMs = 1500) {
   });
 }
 
-function findPreferredOrFreePort(preferred = DEFAULT_PORT) {
+function findPreferredOrFreePort(preferred = DEFAULT_PORT, host = '127.0.0.1') {
   return new Promise((resolvePort, rejectPort) => {
     const tryListen = (portToTry) => {
       const srv = createNetServer();
@@ -122,7 +179,7 @@ function findPreferredOrFreePort(preferred = DEFAULT_PORT) {
           rejectPort(err);
         }
       });
-      srv.listen(portToTry, '127.0.0.1', () => {
+      srv.listen(portToTry, host, () => {
         const { port } = srv.address();
         srv.close(() => resolvePort(port));
       });
@@ -139,7 +196,11 @@ async function getRunningServer() {
       if (!info?.port) continue;
       const res = await httpJson(info.port, '/api/health', 'GET', null, 500);
       if (res.status === 200 && res.data?.ok) {
-        return { ...info, clients: res.data.clients || 0 };
+        return {
+          ...info,
+          clients: res.data.clients || 0,
+          authRequired: Boolean(res.data.authRequired),
+        };
       }
     } catch {
       // Stale lock file
@@ -148,17 +209,26 @@ async function getRunningServer() {
   return null;
 }
 
-async function ensureServerRunning(preferredPort = 0, foreground = false) {
+async function ensureServerRunning(preferredPort = 0, foreground = false, preferredHost = '') {
   const existing = await getRunningServer();
-  if (existing) return { ...existing, reused: true };
+  if (existing && (!preferredHost || existing.host === preferredHost)) {
+    return { ...existing, reused: true };
+  }
+  if (existing && preferredHost && existing.host !== preferredHost) {
+    try { process.kill(existing.pid); } catch {}
+    for (const lockFile of [SERVER_JSON, LEGACY_SERVER_JSON]) {
+      if (existsSync(lockFile)) rmSync(lockFile, { force: true });
+    }
+  }
 
   mkdirSync(RUNTIME_DIR, { recursive: true });
-  const targetPort = await findPreferredOrFreePort(preferredPort || DEFAULT_PORT);
+  const bindHost = preferredHost || '127.0.0.1';
+  const targetPort = await findPreferredOrFreePort(preferredPort || DEFAULT_PORT, bindHost);
 
   if (foreground) {
     const { startStandaloneServer } = await import('../server/app.mjs');
-    const started = await startStandaloneServer({ port: targetPort });
-    const info = { pid: process.pid, port: started.port, startedAt: new Date().toISOString() };
+    const started = await startStandaloneServer({ port: targetPort, host: bindHost });
+    const info = { pid: process.pid, port: started.port, host: bindHost, startedAt: new Date().toISOString() };
     writeFileSync(SERVER_JSON, JSON.stringify(info, null, 2), 'utf-8');
     const cleanup = () => {
       try {
@@ -176,7 +246,8 @@ async function ensureServerRunning(preferredPort = 0, foreground = false) {
   }
 
   const logFd = openSync(SERVER_LOG, 'a');
-  const child = spawn(process.execPath, [SERVER_ENTRY, '--port', String(targetPort)], {
+  const spawnArgs = [SERVER_ENTRY, '--port', String(targetPort), '--host', bindHost];
+  const child = spawn(process.execPath, spawnArgs, {
     cwd: PLUGIN_ROOT,
     detached: true,
     windowsHide: true,
@@ -190,7 +261,7 @@ async function ensureServerRunning(preferredPort = 0, foreground = false) {
     try {
       const res = await httpJson(targetPort, '/api/health', 'GET', null, 400);
       if (res.status === 200 && res.data?.ok) {
-        const info = { pid: child.pid, port: targetPort, startedAt: new Date().toISOString() };
+        const info = { pid: child.pid, port: targetPort, host: bindHost, startedAt: new Date().toISOString() };
         writeFileSync(SERVER_JSON, JSON.stringify(info, null, 2), 'utf-8');
         return { ...info, clients: 0, reused: false };
       }
@@ -256,11 +327,99 @@ function readStdinAll() {
   });
 }
 
+async function handlePasswordCommand(opts, authManager) {
+  const cliToken = authManager.getCliToken();
+  const notifyRunningServer = async () => {
+    const running = await getRunningServer();
+    if (running?.port) {
+      await httpJson(running.port, '/api/auth/reload', 'POST', {}, 800, cliToken).catch(() => {});
+    }
+  };
+
+  if (opts.passwordCmd === 'set') {
+    const status = authManager.setPassword(opts.passwordVal);
+    await notifyRunningServer();
+    console.log(JSON.stringify({
+      ok: true,
+      action: 'set',
+      enabled: status.enabled,
+      authRequired: status.authRequired,
+      message: 'Frontend password set and activated.',
+    }, null, 2));
+    return;
+  }
+
+  if (opts.passwordCmd === 'clear') {
+    const status = authManager.clearPassword();
+    await notifyRunningServer();
+    console.log(JSON.stringify({
+      ok: true,
+      action: 'cancel',
+      enabled: status.enabled,
+      hasPassword: status.hasPassword,
+      authRequired: status.authRequired,
+      message: 'Frontend password canceled and cleared.',
+    }, null, 2));
+    return;
+  }
+
+  if (opts.passwordCmd === 'disable') {
+    const status = authManager.disablePassword();
+    await notifyRunningServer();
+    console.log(JSON.stringify({
+      ok: true,
+      action: 'disable',
+      enabled: status.enabled,
+      hasPassword: status.hasPassword,
+      authRequired: status.authRequired,
+      message: 'Frontend password protection deactivated (stored password retained; use --activate-password to re-enable).',
+    }, null, 2));
+    return;
+  }
+
+  if (opts.passwordCmd === 'activate') {
+    const res = authManager.activatePassword(opts.passwordVal);
+    await notifyRunningServer();
+    console.log(JSON.stringify({
+      ok: true,
+      action: 'activate',
+      enabled: res.enabled,
+      authRequired: res.authRequired,
+      generated: res.generated,
+      password: res.password,
+      message: res.generated
+        ? 'Generated and activated a new random frontend password.'
+        : 'Frontend password protection activated.',
+    }, null, 2));
+    return;
+  }
+
+  if (opts.passwordCmd === 'print') {
+    const info = authManager.printPasswordInfo();
+    console.log(JSON.stringify({
+      ok: true,
+      action: 'print',
+      enabled: info.enabled,
+      hasPassword: info.hasPassword,
+      authRequired: info.authRequired,
+      password: info.password || '(none)',
+      configPath: info.configPath,
+    }, null, 2));
+  }
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
 
   if (opts.help) {
     printHelp();
+    return;
+  }
+
+  const authManager = new PreviewAuthManager();
+
+  if (opts.passwordCmd) {
+    await handlePasswordCommand(opts, authManager);
     return;
   }
 
@@ -278,11 +437,17 @@ async function main() {
 
   if (opts.status) {
     const running = await getRunningServer();
-    console.log(JSON.stringify({ running: Boolean(running), ...(running || {}) }));
+    const authStatus = authManager.getStatus();
+    console.log(JSON.stringify({
+      running: Boolean(running),
+      ...(running || {}),
+      passwordAuth: authStatus,
+    }));
     return;
   }
 
-  const serverInfo = await ensureServerRunning(opts.port, opts.foreground);
+  const cliToken = authManager.getCliToken();
+  const serverInfo = await ensureServerRunning(opts.port, opts.foreground, opts.host);
   let targetUrl = `http://127.0.0.1:${serverInfo.port}/`;
   const focusPayload = {};
 
@@ -292,7 +457,7 @@ async function main() {
       filePath: absFile,
       title: opts.title,
       mode: opts.mode,
-    });
+    }, 2000, cliToken);
     if (created.status !== 200) {
       throw new Error(created.data?.error || `Failed to load file ${absFile}`);
     }
@@ -305,7 +470,7 @@ async function main() {
         content: piped,
         title: opts.title || 'CLI Stream Output',
         mode: opts.mode,
-      });
+      }, 2500, cliToken);
       if (created.status !== 200) {
         throw new Error(created.data?.error || 'Failed to push stdin preview');
       }
@@ -321,24 +486,30 @@ async function main() {
   let windowResult = { mode: 'already-open' };
   if (opts.open) {
     if (!opts.newWindow && serverInfo.clients > 0 && (focusPayload.conversationId || focusPayload.previewId)) {
-      await httpJson(serverInfo.port, '/api/focus', 'POST', focusPayload).catch(() => {});
+      await httpJson(serverInfo.port, '/api/focus', 'POST', focusPayload, 1500, cliToken).catch(() => {});
       windowResult = { mode: 'focused-existing-window', clients: serverInfo.clients };
     } else if (serverInfo.reused) {
-      // Ask the persistent daemon process itself to spawn the app window so short-lived CLI job teardown never kills it
-      const resp = await httpJson(serverInfo.port, '/api/focus', 'POST', { openWindow: true, url: targetUrl }).catch(() => null);
+      const resp = await httpJson(serverInfo.port, '/api/focus', 'POST', { openWindow: true, url: targetUrl }, 1500, cliToken).catch(() => null);
       windowResult = resp?.data?.window || launchStandaloneWindow(targetUrl);
     } else {
       windowResult = launchStandaloneWindow(targetUrl);
     }
   }
 
-  console.log(JSON.stringify({
+  const authStatus = authManager.getStatus();
+  const out = {
     ok: true,
     url: targetUrl,
+    host: serverInfo.host || '127.0.0.1',
     port: serverInfo.port,
     pid: serverInfo.pid,
+    authRequired: authStatus.authRequired,
     window: windowResult,
-  }));
+  };
+  if (out.host !== '127.0.0.1' && out.host !== 'localhost' && !authStatus.authRequired) {
+    out.securityNotice = 'Server is bound to a non-loopback address without password protection. Run `agy-preview password set <pwd>` to secure remote access.';
+  }
+  console.log(JSON.stringify(out));
 }
 
 main().catch((err) => {

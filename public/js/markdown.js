@@ -14,6 +14,15 @@ const IMAGE_FILE_EXTS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.avif',
 ]);
 
+const MEDIA_PREVIEW_EXTS = new Set([
+  '.pdf',
+  '.mp4', '.webm', '.mov', '.m4v', '.ogv', '.mkv', '.avi',
+  '.mp3', '.wav', '.flac', '.ogg', '.oga', '.m4a', '.aac', '.opus', '.weba',
+]);
+
+const INLINE_VIDEO_EXTS = new Set(['.mp4', '.webm', '.mov', '.m4v', '.ogv']);
+const INLINE_AUDIO_EXTS = new Set(['.mp3', '.wav', '.flac', '.ogg', '.oga', '.m4a', '.aac', '.opus', '.weba']);
+
 const DOC_FILE_EXTS = new Set([
   '.md', '.markdown', '.mdx', '.txt', '.log', '.rst', '.csv', '.tsv',
 ]);
@@ -23,8 +32,7 @@ const NON_PREVIEWABLE_BINARY_EXTS = new Set([
   '.exe', '.dll', '.so', '.dylib', '.bin', '.iso', '.dmg', '.msi',
   '.whl', '.pyc', '.pyo', '.pyd', '.class', '.jar', '.o', '.obj', '.a', '.lib',
   '.pt', '.pth', '.ckpt', '.safetensors', '.onnx', '.trt', '.engine', '.npz', '.npy', '.h5', '.hdf5', '.pkl', '.parquet',
-  '.mp4', '.mov', '.avi', '.mkv', '.webm', '.mp3', '.wav', '.flac', '.ogg', '.m4a',
-  '.pdf', '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.blend', '.fbx', '.glb', '.gltf', '.usd', '.usda', '.usdc', '.obj', '.stl', '.ply',
+  '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.blend', '.fbx', '.glb', '.gltf', '.usd', '.usda', '.usdc', '.stl', '.ply',
 ]);
 
 const CALLOUT_ICONS = {
@@ -95,7 +103,7 @@ export function isPreviewableFilePath(rawHref) {
   if (dotIdx === -1) return true;
   const ext = filename.slice(dotIdx);
   if (NON_PREVIEWABLE_BINARY_EXTS.has(ext)) return false;
-  return CODE_FILE_EXTS.has(ext) || DOC_FILE_EXTS.has(ext) || IMAGE_FILE_EXTS.has(ext);
+  return CODE_FILE_EXTS.has(ext) || DOC_FILE_EXTS.has(ext) || IMAGE_FILE_EXTS.has(ext) || MEDIA_PREVIEW_EXTS.has(ext);
 }
 
 export function classifyHref(rawHref) {
@@ -314,6 +322,15 @@ function createMarkedForBase(baseDir = '') {
 
       if (!src) {
         return `<span class="image-alt-badge">[Image: ${alt || 'unavailable'}]</span>`;
+      }
+      const cleanHref = String(token.href || '').split('#')[0].split('?')[0].trim().toLowerCase();
+      const dotIdx = cleanHref.lastIndexOf('.');
+      const ext = dotIdx !== -1 ? cleanHref.slice(dotIdx) : '';
+      if (INLINE_VIDEO_EXTS.has(ext)) {
+        return `<video src="${escapeHtml(src)}" controls playsinline preload="metadata"${titleAttr} class="md-video"></video>`;
+      }
+      if (INLINE_AUDIO_EXTS.has(ext)) {
+        return `<audio src="${escapeHtml(src)}" controls preload="metadata"${titleAttr} class="md-audio"></audio>`;
       }
       return `<img src="${escapeHtml(src)}" alt="${alt}"${titleAttr} class="md-image" data-zoomable="true" loading="lazy" />`;
     },

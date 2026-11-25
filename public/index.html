@@ -110,7 +110,7 @@
           <div id="reader-column" class="reader-column">
             <div class="empty-state">
               <strong data-i18n="readyTitle">Session Preview Ready</strong>
-              <span data-i18n-html="readyHint">Run <code>agy-preview</code>, select a session on the left, or open/drop any <code>.md</code> / <code>.pdf</code> / <code>.mp4</code> / <code>.jsonl</code> file.</span>
+              <span data-i18n-html="readyHint">Run <code>agy-preview</code>, select a session on the left, or open/drop any <code>.md</code> / <code>.pdf</code> / <code>.docx</code> / <code>.xlsx</code> / <code>.pptx</code> / <code>.mp4</code> / <code>.jsonl</code> file.</span>
             </div>
           </div>
         </div>
@@ -184,7 +184,7 @@
       </div>
       <div class="modal-body">
         <div style="display:flex;flex-direction:column;gap:4px;">
-          <label style="font-size:0.75rem;color:var(--text-muted);font-weight:550;" data-i18n="pastePathLabel">Local File Path or Base Folder (supports .md, .pdf, video, audio, images, .csv, .jsonl)</label>
+          <label style="font-size:0.75rem;color:var(--text-muted);font-weight:550;" data-i18n="pastePathLabel">Local File Path or Base Folder (supports .md, .pdf, .docx, .xlsx, .pptx, video, audio, images, .csv, .jsonl)</label>
           <div style="display:flex;gap:6px;">
             <input id="paste-filepath-input" class="input-sm" type="text" placeholder="e.g. E:\Projects\repo\README.md  or  paper.pdf">
             <button id="paste-browse-btn" class="pill-btn" type="button" data-i18n="browseBtn">📂 Browse…</button>
@@ -279,7 +279,7 @@
         document.body.appendChild(s);
         return;
       }
-      const files = ['js/i18n.js', 'js/markdown.js', 'js/transcript-view.js', 'js/app.js'];
+      const files = ['js/i18n.js', 'js/markdown.js', 'js/doc-viewers.js', 'js/transcript-view.js', 'js/app.js'];
       const sources = {};
       await Promise.all(files.map(async (f) => {
         const res = await fetch('/' + f);

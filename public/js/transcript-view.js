@@ -1,5 +1,6 @@
 import { getLang, t } from './i18n.js';
 import { escapeHtml, isPreviewableFilePath, renderMarkdownHtml, enhanceMarkdownDom } from './markdown.js';
+import { APPLE_SPINNER_SVG } from './doc-viewers.js';
 
 const CHEVRON_SVG = `<svg class="chevron-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5L10.5 8 6 12.5"/></svg>`;
 
@@ -372,7 +373,7 @@ function renderLiveStreamFooterHtml(isTurnRunning, hookState, liveTaskLog, turnR
     : '';
   return `<div class="live-stream-footer">
     <div class="live-stream-indicator">
-      <span class="status-dot running"></span>
+      ${APPLE_SPINNER_SVG}
       <span>${escapeHtml(statusText)}</span>
       <span class="live-stream-elapsed" data-stream-since="${turnRunningSinceMs || Date.now()}">${escapeHtml(elapsedStr)}</span>
     </div>

@@ -9,6 +9,13 @@ import {
   downloadSvgElement,
   rethemeMermaidDiagrams,
 } from './markdown.js';
+import {
+  APPLE_SPINNER_SVG,
+  renderCustomPdfViewer,
+  renderWordViewer,
+  renderSpreadsheetViewer,
+  renderPresentationViewer,
+} from './doc-viewers.js';
 import { TranscriptRenderer, formatCompactTokens, renderCliInsightsHtml } from './transcript-view.js';
 
 const isSidecar = Boolean(window.sidecar && typeof window.sidecar.fetch === 'function');
@@ -30,25 +37,99 @@ const DEFAULT_CUSTOM_COLORS = {
   lightBg: '#f5f7fc',
   darkBg: '#131722',
   accent: '#3b6df6',
-  activeSlot: 'bg', // 'bg' | 'accent'
 };
+
+const DEFAULT_FONT_SIZE = 15;
+const MIN_FONT_SIZE = 12;
+const MAX_FONT_SIZE = 24;
+
+const LATIN_FONTS = [
+  { id: 'sans', i18nKey: 'fontSans', previewStack: 'var(--latin-sans), var(--cjk-sans)' },
+  { id: 'serif', i18nKey: 'fontSerif', previewStack: 'var(--latin-serif), var(--cjk-serif)' },
+  { id: 'times', i18nKey: 'fontTimes', previewStack: 'var(--latin-times), var(--cjk-songti)' },
+];
+
+const CJK_FONTS = [
+  { id: 'sans', i18nKey: 'fontCjkSans', previewStack: 'var(--cjk-sans)' },
+  { id: 'serif', i18nKey: 'fontCjkSerif', previewStack: 'var(--cjk-serif)' },
+  { id: 'songti', i18nKey: 'fontSongti', previewStack: 'var(--cjk-songti)' },
+  { id: 'kaiti', i18nKey: 'fontKaiti', previewStack: 'var(--cjk-kaiti)' },
+  { id: 'fangsong', i18nKey: 'fontFangsong', previewStack: 'var(--cjk-fangsong)' },
+];
 
 function isValidHex(str) {
   return typeof str === 'string' && /^#[0-9a-fA-F]{6}$/.test(str.trim());
 }
 
-function loadCustomColors() {
-  try {
-    const raw = JSON.parse(localStorage.getItem('amp-custom-rgb') || '{}');
-    return {
-      lightBg: isValidHex(raw.lightBg) ? raw.lightBg : DEFAULT_CUSTOM_COLORS.lightBg,
-      darkBg: isValidHex(raw.darkBg) ? raw.darkBg : DEFAULT_CUSTOM_COLORS.darkBg,
-      accent: isValidHex(raw.accent) ? raw.accent : DEFAULT_CUSTOM_COLORS.accent,
-      activeSlot: raw.activeSlot === 'accent' ? 'accent' : 'bg',
-    };
-  } catch {
-    return { ...DEFAULT_CUSTOM_COLORS };
+function isCustomPaletteId(id) {
+  return typeof id === 'string' && id.startsWith('custom-');
+}
+
+function sanitizeClientCustomPalettes(arr) {
+  if (!Array.isArray(arr)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const item of arr) {
+    if (!item || typeof item !== 'object') continue;
+    const id = String(item.id || '').trim();
+    if (!isCustomPaletteId(id) || seen.has(id)) continue;
+    const lightBg = isValidHex(item.lightBg) ? item.lightBg.trim().toLowerCase() : DEFAULT_CUSTOM_COLORS.lightBg;
+    const darkBg = isValidHex(item.darkBg) ? item.darkBg.trim().toLowerCase() : DEFAULT_CUSTOM_COLORS.darkBg;
+    const accent = isValidHex(item.accent) ? item.accent.trim().toLowerCase() : DEFAULT_CUSTOM_COLORS.accent;
+    const name = String(item.name || '').trim().slice(0, 40) || 'Custom';
+    seen.add(id);
+    out.push({ id, name, lightBg, darkBg, accent });
   }
+  return out;
+}
+
+function loadCustomPalettes() {
+  try {
+    const rawList = localStorage.getItem('amp-custom-palettes-v1');
+    if (rawList !== null) {
+      return sanitizeClientCustomPalettes(JSON.parse(rawList));
+    }
+    // Seamless one-time migration from legacy single-slot `amp-custom-rgb`
+    const legacyRaw = localStorage.getItem('amp-custom-rgb');
+    if (legacyRaw) {
+      const legacy = JSON.parse(legacyRaw);
+      const migrated = sanitizeClientCustomPalettes([
+        {
+          id: 'custom-1',
+          name: getLang() === 'zh' ? '自定义配色 1' : 'Custom 1',
+          lightBg: legacy?.lightBg,
+          darkBg: legacy?.darkBg,
+          accent: legacy?.accent,
+        },
+      ]);
+      localStorage.setItem('amp-custom-palettes-v1', JSON.stringify(migrated));
+      if (localStorage.getItem('amp-palette') === 'custom' && migrated.length > 0) {
+        localStorage.setItem('amp-palette', migrated[0].id);
+      }
+      return migrated;
+    }
+  } catch {}
+  return [];
+}
+
+function loadInitialFontSize() {
+  const n = Number(localStorage.getItem('amp-font-size'));
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_FONT_SIZE;
+  return Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, Math.round(n)));
+}
+
+function loadInitialTypography() {
+  const rawProse = localStorage.getItem('amp-prose') || 'sans';
+  let rawCjk = localStorage.getItem('amp-prose-cjk') || '';
+  if (rawCjk === 'hei') rawCjk = 'sans';
+  let latin = rawProse;
+  if (['songti', 'kaiti', 'fangsong'].includes(rawProse)) {
+    latin = 'times';
+    if (!rawCjk) rawCjk = rawProse;
+  }
+  if (!LATIN_FONTS.some((f) => f.id === latin)) latin = 'sans';
+  const cjk = CJK_FONTS.some((f) => f.id === rawCjk) ? rawCjk : 'sans';
+  return { latin, cjk };
 }
 
 function clampByte(n) {
@@ -165,21 +246,53 @@ function loadCachedPinnedIds() {
   }
 }
 
+function loadSessionReadState() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('amp-session-read-state-v1') || 'null');
+    if (raw && raw.initialized && typeof raw.seenSteps === 'object' && raw.seenSteps !== null) {
+      return {
+        initialized: true,
+        seenSteps: { ...raw.seenSteps },
+        unreadIds: new Set(Array.isArray(raw.unreadIds) ? raw.unreadIds.filter(Boolean) : []),
+      };
+    }
+  } catch {}
+  return { initialized: false, seenSteps: {}, unreadIds: new Set() };
+}
+
+const initialReadState = loadSessionReadState();
+const initialCustomPalettes = loadCustomPalettes();
+const rawSavedPalette = localStorage.getItem('amp-palette') || 'parchment';
+const resolvedInitialPalette = rawSavedPalette === 'custom'
+  ? (initialCustomPalettes[0]?.id || 'parchment')
+  : rawSavedPalette;
+
+const initialTypography = loadInitialTypography();
+
 const state = {
   mode: 'sessions', // 'sessions' | 'docs'
   flavor: localStorage.getItem('amp-flavor') || 'antigravity-cli',
   theme: initialThemeMode(), // 'light' | 'dark'
-  palette: localStorage.getItem('amp-palette') || 'parchment', // 8 presets | 'custom'
-  customColors: loadCustomColors(),
+  palette: resolvedInitialPalette, // 8 presets | 'custom-<id>'
+  customPalettes: initialCustomPalettes,
+  rgbActiveSlot: 'bg', // 'bg' | 'accent'
+  renamingPaletteId: null,
+  fontSize: loadInitialFontSize(),
+  openFontPicker: null, // null | 'latin' | 'cjk'
   width: localStorage.getItem('amp-width') || 'normal',
   tables: localStorage.getItem('amp-tables') || 'compact',
-  prose: localStorage.getItem('amp-prose') || 'sans',
+  prose: initialTypography.latin,
+  proseCjk: initialTypography.cjk,
   autoFollow: true,
   activeConvId: null,
   activePreviewId: localStorage.getItem('amp-last-preview') || null,
   currentBaseDir: '',
   docsStoragePath: '',
   conversations: [],
+  readStateInitialized: initialReadState.initialized,
+  seenSessionSteps: initialReadState.seenSteps,
+  unreadConvIds: initialReadState.unreadIds,
+  prevRunningIds: new Set(),
   pinnedIds: loadCachedPinnedIds(),
   pinnedGroupOpen: true,
   allProjectKeys: [],
@@ -233,38 +346,131 @@ async function apiFetch(url, opts = {}) {
   return res;
 }
 
-function getActiveCustomBgHex() {
-  return state.theme === 'dark' ? state.customColors.darkBg : state.customColors.lightBg;
+function getActiveCustomPalette() {
+  if (!isCustomPaletteId(state.palette)) return null;
+  return state.customPalettes.find((p) => p.id === state.palette) || null;
 }
 
-function setActiveCustomBgHex(hex) {
-  if (state.theme === 'dark') state.customColors.darkBg = hex;
-  else state.customColors.lightBg = hex;
+function getPaletteColorsFor(palObj) {
+  if (!palObj) return DEFAULT_CUSTOM_COLORS;
+  return {
+    bgHex: state.theme === 'dark' ? palObj.darkBg : palObj.lightBg,
+    accentHex: palObj.accent,
+  };
 }
 
-function saveCustomColors() {
-  localStorage.setItem('amp-custom-rgb', JSON.stringify(state.customColors));
+let customPaletteSyncTimer = null;
+function saveCustomPalettes({ syncServer = true } = {}) {
+  try {
+    localStorage.setItem('amp-custom-palettes-v1', JSON.stringify(state.customPalettes));
+  } catch {}
+  if (!syncServer) return;
+  if (customPaletteSyncTimer) clearTimeout(customPaletteSyncTimer);
+  customPaletteSyncTimer = setTimeout(() => {
+    apiFetch('/api/custom-palettes', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ palettes: state.customPalettes }),
+    }).catch(() => {});
+  }, 200);
+}
+
+async function loadServerCustomPalettes() {
+  try {
+    const res = await apiFetch('/api/custom-palettes');
+    if (!res.ok) return;
+    const data = await res.json();
+    const serverList = sanitizeClientCustomPalettes(data.palettes);
+    if (serverList.length > 0) {
+      state.customPalettes = serverList;
+      saveCustomPalettes({ syncServer: false });
+      applyAppearance();
+    } else if (state.customPalettes.length > 0) {
+      // Push migrated local palettes to server once
+      saveCustomPalettes({ syncServer: true });
+    }
+  } catch {}
+}
+
+function createNewCustomPalette() {
+  let seedLight = DEFAULT_CUSTOM_COLORS.lightBg;
+  let seedDark = DEFAULT_CUSTOM_COLORS.darkBg;
+  let seedAccent = DEFAULT_CUSTOM_COLORS.accent;
+
+  const activeCustom = getActiveCustomPalette();
+  if (activeCustom) {
+    seedLight = activeCustom.lightBg;
+    seedDark = activeCustom.darkBg;
+    seedAccent = activeCustom.accent;
+  } else if (state.palette !== 'parchment' || state.customPalettes.length > 0) {
+    const preset = THEME_PALETTES.find((p) => p.id === state.palette);
+    if (preset) {
+      seedLight = preset.lightBg;
+      seedDark = preset.darkBg;
+      seedAccent = preset.accent;
+    }
+  }
+
+  const nextNum = state.customPalettes.length + 1;
+  const candidate = {
+    id: `custom-${Date.now().toString(36)}-${nextNum}`,
+    name: t('defaultCustomName', { n: nextNum }),
+    lightBg: seedLight,
+    darkBg: seedDark,
+    accent: seedAccent,
+  };
+  state.customPalettes.push(candidate);
+  state.palette = candidate.id;
+  state.renamingPaletteId = null;
+  localStorage.setItem('amp-palette', candidate.id);
+  saveCustomPalettes();
+  applyAppearance();
+}
+
+function commitPaletteRename(palId, rawName) {
+  state.renamingPaletteId = null;
+  const target = state.customPalettes.find((p) => p.id === palId);
+  if (target && rawName && rawName.trim()) {
+    target.name = rawName.trim().slice(0, 40);
+    saveCustomPalettes();
+  }
+  renderPrefsMenu();
+}
+
+function deleteCustomPalette(palId) {
+  const idx = state.customPalettes.findIndex((p) => p.id === palId);
+  if (idx === -1) return;
+  state.customPalettes.splice(idx, 1);
+  if (state.renamingPaletteId === palId) state.renamingPaletteId = null;
+  if (state.palette === palId) {
+    const fallback = state.customPalettes[Math.max(0, idx - 1)]?.id || 'parchment';
+    state.palette = fallback;
+    localStorage.setItem('amp-palette', fallback);
+  }
+  saveCustomPalettes();
+  applyAppearance();
 }
 
 function resolvedTheme() {
-  if (state.palette === 'custom') {
-    const lum = rgbLuminance(hexToRgb(getActiveCustomBgHex()));
+  const activeCustom = getActiveCustomPalette();
+  if (activeCustom) {
+    const { bgHex } = getPaletteColorsFor(activeCustom);
+    const lum = rgbLuminance(hexToRgb(bgHex));
     return lum < 0.46 ? 'dark' : 'light';
   }
   return state.theme === 'dark' ? 'dark' : 'light';
 }
 
-function renderRgbPanelHtml() {
-  const bgHex = getActiveCustomBgHex();
-  const accHex = state.customColors.accent;
-  const activeSlot = state.customColors.activeSlot === 'accent' ? 'accent' : 'bg';
+function renderRgbPanelHtml(palObj) {
+  const { bgHex, accentHex: accHex } = getPaletteColorsFor(palObj);
+  const activeSlot = state.rgbActiveSlot === 'accent' ? 'accent' : 'bg';
   const currentHex = activeSlot === 'accent' ? accHex : bgHex;
   const rgb = hexToRgb(currentHex);
 
   return `
-    <div class="rgb-panel" data-rgb-panel>
+    <div class="rgb-panel" data-rgb-panel="${escapeHtml(palObj.id)}">
       <div class="rgb-panel-header">
-        <span>${escapeHtml(t('rgbPanelTitle'))}</span>
+        <span>${escapeHtml(palObj.name)} · RGB</span>
         <button type="button" class="code-mini-btn" data-rgb-reset title="${escapeHtml(t('rgbResetTip'))}">${escapeHtml(t('rgbResetBtn'))}</button>
       </div>
       <div class="rgb-slot-tabs">
@@ -316,14 +522,66 @@ function renderPrefsMenu() {
     </div>
   `;
 
+  const activeLatinObj = LATIN_FONTS.find((f) => f.id === state.prose) || LATIN_FONTS[0];
+  const activeCjkObj = CJK_FONTS.find((f) => f.id === state.proseCjk) || CJK_FONTS[0];
+  const isZhSplit = lang === 'zh';
+  const latinOpen = state.openFontPicker === 'latin';
+  const cjkOpen = isZhSplit && state.openFontPicker === 'cjk';
+
+  const latinPickerHtml = `
+    <div class="prefs-control-row">
+      <span class="prefs-control-label">${escapeHtml(t(isZhSplit ? 'lblLatinFont' : 'lblFont'))}</span>
+      <button type="button" class="prefs-expand-trigger ${latinOpen ? 'open' : ''}" data-toggle-font-picker="latin">
+        <span style="font-family:${activeLatinObj.previewStack};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(t(activeLatinObj.i18nKey))}</span>
+        <span class="prefs-expand-chevron">${latinOpen ? '▴' : '▾'}</span>
+      </button>
+    </div>
+    ${latinOpen ? `
+      <div class="font-picker-panel" data-font-picker-panel="latin">
+        ${LATIN_FONTS.map((f) => {
+          const active = state.prose === f.id;
+          return `<button type="button" class="theme-menu-item font-option-item ${active ? 'active' : ''}" data-pref-prose="${f.id}">
+            <span style="font-family:${f.previewStack};">${escapeHtml(t(f.i18nKey))}</span>
+            <span>${active ? '✓' : ''}</span>
+          </button>`;
+        }).join('')}
+      </div>
+    ` : ''}
+  `;
+
+  const cjkPickerHtml = isZhSplit ? `
+    <div class="prefs-control-row">
+      <span class="prefs-control-label">${escapeHtml(t('lblCjkFont'))}</span>
+      <button type="button" class="prefs-expand-trigger ${cjkOpen ? 'open' : ''}" data-toggle-font-picker="cjk">
+        <span style="font-family:${activeCjkObj.previewStack};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(t(activeCjkObj.i18nKey))}</span>
+        <span class="prefs-expand-chevron">${cjkOpen ? '▴' : '▾'}</span>
+      </button>
+    </div>
+    ${cjkOpen ? `
+      <div class="font-picker-panel" data-font-picker-panel="cjk">
+        ${CJK_FONTS.map((f) => {
+          const active = state.proseCjk === f.id;
+          return `<button type="button" class="theme-menu-item font-option-item ${active ? 'active' : ''}" data-pref-prose-cjk="${f.id}">
+            <span style="font-family:${f.previewStack};">${escapeHtml(t(f.i18nKey))}</span>
+            <span>${active ? '✓' : ''}</span>
+          </button>`;
+        }).join('')}
+      </div>
+    ` : ''}
+  ` : '';
+
   const typoRowsHtml = `
     <div class="prefs-control-row">
-      <span class="prefs-control-label">${escapeHtml(t('lblFont'))}</span>
-      <div class="prefs-seg-group">
-        <button type="button" class="prefs-seg-btn ${state.prose === 'sans' ? 'active' : ''}" data-pref-prose="sans">${escapeHtml(t('fontSans'))}</button>
-        <button type="button" class="prefs-seg-btn ${state.prose === 'serif' ? 'active' : ''}" data-pref-prose="serif">${escapeHtml(t('fontSerif'))}</button>
+      <span class="prefs-control-label">${escapeHtml(t('lblFontSize'))}</span>
+      <div class="font-size-stepper">
+        <button type="button" class="prefs-step-btn" data-font-size-delta="-1" ${state.fontSize <= MIN_FONT_SIZE ? 'disabled' : ''} title="${escapeHtml(t('fontSizeDecTip'))}">−</button>
+        <span class="font-size-readout" data-font-size-label>${state.fontSize}px</span>
+        <button type="button" class="prefs-step-btn" data-font-size-delta="1" ${state.fontSize >= MAX_FONT_SIZE ? 'disabled' : ''} title="${escapeHtml(t('fontSizeIncTip'))}">+</button>
+        <button type="button" class="prefs-step-btn reset" data-font-size-reset ${state.fontSize === DEFAULT_FONT_SIZE ? 'disabled' : ''} title="${escapeHtml(t('fontSizeResetTip'))}">↺</button>
       </div>
     </div>
+    ${latinPickerHtml}
+    ${cjkPickerHtml}
     <div class="prefs-control-row">
       <span class="prefs-control-label">${escapeHtml(t('lblWidth'))}</span>
       <div class="prefs-seg-group">
@@ -364,16 +622,38 @@ function renderPrefsMenu() {
     </button>`;
   }).join('');
 
-  const customBg = getActiveCustomBgHex();
-  const customGrad = `linear-gradient(135deg, ${customBg} 50%, ${state.customColors.accent} 50%)`;
-  const isCustomActive = state.palette === 'custom';
-  const customItemHtml = `<button type="button" class="theme-menu-item ${isCustomActive ? 'active' : ''}" data-theme-palette="custom">
-    <span class="theme-menu-item-left">
-      <span class="palette-dual-swatch" data-custom-main-swatch style="background:${customGrad};"></span>
-      <span>${escapeHtml(t('pal_custom'))}</span>
-    </span>
-    <span>${isCustomActive ? '✓' : ''}</span>
-  </button>`;
+  const customCandidatesHtml = state.customPalettes.map((cp) => {
+    const active = state.palette === cp.id;
+    const { bgHex, accentHex } = getPaletteColorsFor(cp);
+    const grad = `linear-gradient(135deg, ${bgHex} 50%, ${accentHex} 50%)`;
+    if (state.renamingPaletteId === cp.id) {
+      return `
+        <div class="palette-rename-row">
+          <span class="palette-dual-swatch" style="background:${grad};"></span>
+          <input type="text" class="palette-rename-input" data-palette-rename-input="${escapeHtml(cp.id)}" value="${escapeHtml(cp.name)}" maxlength="40">
+        </div>
+        ${active ? renderRgbPanelHtml(cp) : ''}
+      `;
+    }
+    return `
+      <div class="custom-palette-row ${active ? 'active' : ''}">
+        <button type="button" class="custom-palette-select-btn" data-theme-palette="${escapeHtml(cp.id)}">
+          <span class="theme-menu-item-left">
+            <span class="palette-dual-swatch" data-custom-swatch="${escapeHtml(cp.id)}" style="background:${grad};"></span>
+            <span class="custom-palette-name">${escapeHtml(cp.name)}</span>
+          </span>
+          <span>${active ? '✓' : ''}</span>
+        </button>
+        <span class="palette-row-actions">
+          <button type="button" class="palette-mini-action" data-rename-palette="${escapeHtml(cp.id)}" title="${escapeHtml(t('renamePaletteTip'))}">✎</button>
+          <button type="button" class="palette-mini-action danger" data-delete-palette="${escapeHtml(cp.id)}" title="${escapeHtml(t('deletePaletteTip'))}">✕</button>
+        </span>
+      </div>
+      ${active ? renderRgbPanelHtml(cp) : ''}
+    `;
+  }).join('');
+
+  const addCustomBtnHtml = `<button type="button" class="add-custom-palette-btn" data-add-custom-palette>${escapeHtml(t('addCustomPaletteBtn'))}</button>`;
 
   menu.innerHTML = `
     ${langSegHtml}
@@ -386,28 +666,54 @@ function renderPrefsMenu() {
     <div class="theme-menu-divider"></div>
     <div class="theme-menu-section-label">${escapeHtml(t('secPalette'))}</div>
     ${paletteItemsHtml}
-    ${customItemHtml}
-    ${isCustomActive ? renderRgbPanelHtml() : ''}
+    ${customCandidatesHtml}
+    ${addCustomBtnHtml}
   `;
+
+  if (state.renamingPaletteId) {
+    const inp = menu.querySelector(`[data-palette-rename-input="${CSS.escape(state.renamingPaletteId)}"]`);
+    if (inp) {
+      inp.focus();
+      inp.select();
+    }
+  }
 }
 
 function applyAppearance({ rebuildMenu = true } = {}) {
-  const isCustom = state.palette === 'custom';
-  const validPalette = isCustom || THEME_PALETTES.some((p) => p.id === state.palette) ? state.palette : 'parchment';
-  state.palette = validPalette;
+  const activeCustom = getActiveCustomPalette();
+  const isPreset = THEME_PALETTES.some((p) => p.id === state.palette);
+  if (!activeCustom && !isPreset) {
+    state.palette = state.customPalettes[0]?.id || 'parchment';
+  }
+  const currentCustom = getActiveCustomPalette();
 
   let effectiveTheme = state.theme === 'dark' ? 'dark' : 'light';
-  if (isCustom) {
-    effectiveTheme = applyCustomPaletteCssVars(getActiveCustomBgHex(), state.customColors.accent);
+  if (currentCustom) {
+    const { bgHex, accentHex } = getPaletteColorsFor(currentCustom);
+    effectiveTheme = applyCustomPaletteCssVars(bgHex, accentHex);
   } else {
     clearCustomPaletteCssVars();
   }
 
+  if (!LATIN_FONTS.some((f) => f.id === state.prose)) {
+    state.prose = 'sans';
+  }
+  if (!CJK_FONTS.some((f) => f.id === state.proseCjk)) {
+    state.proseCjk = 'sans';
+  }
+  const effectiveCjk = getLang() === 'zh'
+    ? state.proseCjk
+    : (state.prose === 'sans' ? 'sans' : 'serif');
+
+  state.fontSize = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, Math.round(state.fontSize || DEFAULT_FONT_SIZE)));
+  document.documentElement.style.setProperty('--reader-scale', (state.fontSize / DEFAULT_FONT_SIZE).toFixed(4));
+
   document.documentElement.setAttribute('data-theme', effectiveTheme);
-  document.documentElement.setAttribute('data-palette', validPalette);
+  document.documentElement.setAttribute('data-palette', currentCustom ? 'custom' : state.palette);
   document.documentElement.setAttribute('data-width', state.width);
   document.documentElement.setAttribute('data-tables', state.tables);
   document.documentElement.setAttribute('data-prose', state.prose);
+  document.documentElement.setAttribute('data-prose-cjk', effectiveCjk);
 
   const hljsLight = el('hljs-light-css');
   const hljsDark = el('hljs-dark-css');
@@ -418,10 +724,11 @@ function applyAppearance({ rebuildMenu = true } = {}) {
 
   const swatchEl = el('prefs-btn-swatch');
   if (swatchEl) {
-    if (isCustom) {
-      swatchEl.style.background = `linear-gradient(135deg, ${getActiveCustomBgHex()} 50%, ${state.customColors.accent} 50%)`;
+    if (currentCustom) {
+      const { bgHex, accentHex } = getPaletteColorsFor(currentCustom);
+      swatchEl.style.background = `linear-gradient(135deg, ${bgHex} 50%, ${accentHex} 50%)`;
     } else {
-      const palObj = THEME_PALETTES.find((p) => p.id === validPalette) || THEME_PALETTES[0];
+      const palObj = THEME_PALETTES.find((p) => p.id === state.palette) || THEME_PALETTES[0];
       const bgHex = effectiveTheme === 'dark' ? palObj.darkBg : palObj.lightBg;
       swatchEl.style.background = `linear-gradient(135deg, ${bgHex} 50%, ${palObj.accent} 50%)`;
     }
@@ -439,10 +746,10 @@ function applyAppearance({ rebuildMenu = true } = {}) {
 
 function syncRgbControlsInPlace(nextHex) {
   const menu = el('prefs-menu');
-  if (!menu) return;
+  const activeCustom = getActiveCustomPalette();
+  if (!menu || !activeCustom) return;
   const rgb = hexToRgb(nextHex);
-  const bgHex = getActiveCustomBgHex();
-  const accHex = state.customColors.accent;
+  const { bgHex, accentHex: accHex } = getPaletteColorsFor(activeCustom);
   const picker = menu.querySelector('[data-rgb-picker]');
   const hexIn = menu.querySelector('[data-rgb-hex]');
   if (picker && picker.value.toLowerCase() !== nextHex.toLowerCase()) picker.value = nextHex;
@@ -455,23 +762,25 @@ function syncRgbControlsInPlace(nextHex) {
   }
   const dotBg = menu.querySelector('[data-rgb-dot-bg]');
   const dotAcc = menu.querySelector('[data-rgb-dot-accent]');
-  const mainSwatch = menu.querySelector('[data-custom-main-swatch]');
+  const rowSwatch = menu.querySelector(`[data-custom-swatch="${CSS.escape(activeCustom.id)}"]`);
   if (dotBg) dotBg.style.background = bgHex;
   if (dotAcc) dotAcc.style.background = accHex;
-  if (mainSwatch) mainSwatch.style.background = `linear-gradient(135deg, ${bgHex} 50%, ${accHex} 50%)`;
+  if (rowSwatch) rowSwatch.style.background = `linear-gradient(135deg, ${bgHex} 50%, ${accHex} 50%)`;
 }
 
 function applyCustomSlotColorLive(nextHex) {
   if (!isValidHex(nextHex)) return;
+  const activeCustom = getActiveCustomPalette();
+  if (!activeCustom) return;
   const normalized = nextHex.toLowerCase();
-  if (state.customColors.activeSlot === 'accent') {
-    state.customColors.accent = normalized;
+  if (state.rgbActiveSlot === 'accent') {
+    activeCustom.accent = normalized;
+  } else if (state.theme === 'dark') {
+    activeCustom.darkBg = normalized;
   } else {
-    setActiveCustomBgHex(normalized);
+    activeCustom.lightBg = normalized;
   }
-  state.palette = 'custom';
-  localStorage.setItem('amp-palette', 'custom');
-  saveCustomColors();
+  saveCustomPalettes();
   applyAppearance({ rebuildMenu: false });
   syncRgbControlsInPlace(normalized);
 }
@@ -670,12 +979,97 @@ async function togglePinSession(convId) {
   } catch {}
 }
 
+function saveSessionReadState() {
+  try {
+    localStorage.setItem('amp-session-read-state-v1', JSON.stringify({
+      initialized: state.readStateInitialized,
+      seenSteps: state.seenSessionSteps,
+      unreadIds: Array.from(state.unreadConvIds),
+    }));
+  } catch {}
+}
+
+function reconcileSessionReadState(convs) {
+  if (!Array.isArray(convs)) return;
+  if (!state.readStateInitialized) {
+    for (const c of convs) {
+      if (!c?.id) continue;
+      state.seenSessionSteps[c.id] = c.stepCount || 0;
+      if (isConvActivelyRunning(c)) {
+        state.prevRunningIds.add(c.id);
+      }
+    }
+    state.readStateInitialized = true;
+    saveSessionReadState();
+    return;
+  }
+
+  let changed = false;
+  for (const c of convs) {
+    if (!c?.id) continue;
+    const id = c.id;
+    const steps = c.stepCount || 0;
+    const running = isConvActivelyRunning(c);
+    const isViewedNow = state.mode === 'sessions' && state.activeConvId === id;
+
+    if (running) {
+      state.prevRunningIds.add(id);
+      if (state.unreadConvIds.delete(id)) changed = true;
+      continue;
+    }
+
+    const wasRunning = state.prevRunningIds.has(id);
+    if (wasRunning) state.prevRunningIds.delete(id);
+    const prevSeen = state.seenSessionSteps[id];
+
+    if (isViewedNow) {
+      if (state.unreadConvIds.delete(id)) changed = true;
+      if (prevSeen !== steps) {
+        state.seenSessionSteps[id] = steps;
+        changed = true;
+      }
+    } else {
+      const advancedSinceSeen = prevSeen !== undefined && steps > prevSeen;
+      const freshCompletedSession = prevSeen === undefined && steps > 0 && (Date.now() - (c.updatedAt || 0) < 5 * 60 * 1000);
+      if (wasRunning || advancedSinceSeen || freshCompletedSession) {
+        if (!state.unreadConvIds.has(id)) {
+          state.unreadConvIds.add(id);
+          changed = true;
+        }
+      }
+      if (prevSeen === undefined) {
+        state.seenSessionSteps[id] = steps;
+        changed = true;
+      }
+    }
+  }
+
+  if (changed) {
+    saveSessionReadState();
+  }
+}
+
+function markConversationAsRead(convId, knownStepCount = null) {
+  if (!convId) return;
+  let changed = state.unreadConvIds.delete(convId);
+  const meta = state.conversations.find((c) => c.id === convId);
+  const steps = Math.max(state.seenSessionSteps[convId] || 0, meta?.stepCount || 0, knownStepCount || 0);
+  if (state.seenSessionSteps[convId] !== steps) {
+    state.seenSessionSteps[convId] = steps;
+    changed = true;
+  }
+  if (changed) {
+    saveSessionReadState();
+  }
+}
+
 async function loadConversations() {
   try {
     const res = await apiFetch(`/api/conversations?flavor=${encodeURIComponent(state.flavor)}`);
     if (!res.ok) return;
     const data = await res.json();
     state.conversations = data.conversations || [];
+    reconcileSessionReadState(state.conversations);
     if (Array.isArray(data.pinnedIds)) {
       state.pinnedIds = data.pinnedIds;
       try { localStorage.setItem('amp-pinned-sessions', JSON.stringify(state.pinnedIds)); } catch {}
@@ -746,6 +1140,7 @@ function patchConversationSidebarState(convId, { hookState, stepCount, activeSta
     stepCount: nextSteps,
     updatedAt: nextUpdated,
   };
+  reconcileSessionReadState([state.conversations[idx]]);
   if (state.mode === 'sessions') {
     renderSidebarList();
   }
@@ -755,26 +1150,33 @@ function renderSessionButtonHtml(c, { showProjectPill = false } = {}) {
   const active = c.id === state.activeConvId ? 'active' : '';
   const sub = c.isSubagent ? 'is-subagent' : '';
   const runningNow = isConvActivelyRunning(c);
-  const dotClass = runningNow ? 'running' : '';
-  const runningItemCls = runningNow ? 'is-running-session' : '';
+  const isUnreadCompleted = !runningNow && state.unreadConvIds.has(c.id);
+  const itemStateCls = runningNow
+    ? 'is-running-session'
+    : (isUnreadCompleted ? 'is-unread-completed' : '');
+  const indicatorHtml = runningNow
+    ? APPLE_SPINNER_SVG
+    : `<span class="status-dot ${isUnreadCompleted ? 'unread-completed' : 'idle-read'}"></span>`;
   const timeStr = formatCompactDate(c.updatedAt);
   const isPinned = state.pinnedIds.includes(c.id);
   const starTip = isPinned ? t('unpinSessionTip') : t('pinSessionTip');
   const liveLabel = formatSidebarLiveStatus(c);
-  const liveBadgeHtml = liveLabel
+  const statusPillHtml = runningNow && liveLabel
     ? `<span class="session-live-status-pill">${escapeHtml(liveLabel)}</span>`
-    : '';
+    : (isUnreadCompleted
+        ? `<span class="session-unread-pill">${escapeHtml(t('unreadBadge'))}</span>`
+        : '');
   const projBadge = showProjectPill
     ? `<span class="session-project-pill">${escapeHtml(resolveProjectLabel(c))}</span>`
     : `<span>${escapeHtml(c.id.slice(0, 8))}${c.stepCount ? ` · ${c.stepCount} ${escapeHtml(t('stepsStat'))}` : ''}</span>`;
-  return `<button type="button" class="session-item ${active} ${sub} ${runningItemCls}" data-conv-id="${escapeHtml(c.id)}" title="${escapeHtml(c.title)}">
+  return `<button type="button" class="session-item ${active} ${sub} ${itemStateCls}" data-conv-id="${escapeHtml(c.id)}" title="${escapeHtml(c.title)}">
     <div class="session-title-line">
-      <span class="status-dot ${dotClass}"></span>
+      ${indicatorHtml}
       <span class="session-title-text">${escapeHtml(c.title)}</span>
       <span class="session-star-action ${isPinned ? 'pinned' : ''}" data-pin-conv="${escapeHtml(c.id)}" title="${escapeHtml(starTip)}">${isPinned ? '★' : '☆'}</span>
     </div>
     <div class="session-meta-line">
-      <span class="session-meta-left">${liveBadgeHtml}${projBadge}</span>
+      <span class="session-meta-left">${statusPillHtml}${projBadge}</span>
       <span>${escapeHtml(timeStr)}</span>
     </div>
   </button>`;
@@ -922,12 +1324,18 @@ function renderSidebarList() {
   const byId = new Map(filtered.map((c) => [c.id, c]));
   const pinnedConvs = state.pinnedIds.map((id) => byId.get(id)).filter(Boolean);
   const pinnedOpen = query ? true : state.pinnedGroupOpen;
+  const pinnedHasRunning = pinnedConvs.some(isConvActivelyRunning);
+  const pinnedHasUnread = pinnedConvs.some((s) => !isConvActivelyRunning(s) && state.unreadConvIds.has(s.id));
+  const pinnedStatusHtml = pinnedHasRunning
+    ? `<span class="folder-status-wrap" title="${escapeHtml(t('sidebarRunningBadge'))}">${APPLE_SPINNER_SVG}</span>`
+    : (pinnedHasUnread ? `<span class="status-dot unread-completed" title="${escapeHtml(t('unreadBadge'))}"></span>` : '');
   const pinnedSectionHtml = pinnedConvs.length > 0
     ? `<div class="project-folder pinned-folder" data-open="${pinnedOpen}">
         <button type="button" class="project-folder-header" data-toggle-pinned-group>
           <span class="project-folder-left">
             ${CHEVRON_SVG}
             <span class="project-folder-name">${escapeHtml(t('pinnedHeader'))}</span>
+            ${pinnedStatusHtml}
           </span>
           <span class="project-folder-meta">
             <span class="project-folder-count">${pinnedConvs.length}</span>
@@ -1010,7 +1418,10 @@ function renderSidebarList() {
     const displayCount = rootAll.length || grp.items.length;
     const folderTooltip = grp.workspaceUri ? `${grp.label} (${grp.workspaceUri})` : grp.label;
     const groupHasRunning = grp.items.some(isConvActivelyRunning);
-    const groupRunningDot = groupHasRunning ? `<span class="status-dot running" title="${escapeHtml(t('sidebarRunningBadge'))}"></span>` : '';
+    const groupHasUnread = grp.items.some((s) => !isConvActivelyRunning(s) && state.unreadConvIds.has(s.id));
+    const groupRunningDot = groupHasRunning
+      ? `<span class="folder-status-wrap" title="${escapeHtml(t('sidebarRunningBadge'))}">${APPLE_SPINNER_SVG}</span>`
+      : (groupHasUnread ? `<span class="status-dot unread-completed" title="${escapeHtml(t('unreadBadge'))}"></span>` : '');
 
     return `<div class="project-folder" data-project-key="${escapeHtml(grp.key)}" data-open="${isOpen}">
       <button type="button" class="project-folder-header" data-toggle-project="${escapeHtml(grp.key)}" title="${escapeHtml(folderTooltip)}">
@@ -1138,6 +1549,17 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
         try { localStorage.setItem('amp-pinned-sessions', JSON.stringify(state.pinnedIds)); } catch {}
         updatePinSessionButton();
         if (state.mode === 'sessions') renderSidebarList();
+      }
+    } catch {}
+  });
+
+  es.addEventListener('custom-palettes', (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      if (Array.isArray(data.palettes)) {
+        state.customPalettes = sanitizeClientCustomPalettes(data.palettes);
+        saveCustomPalettes({ syncServer: false });
+        applyAppearance();
       }
     } catch {}
   });
@@ -1280,6 +1702,9 @@ function renderFolderListingIntoContainer(bodyEl, listingData, targetMode = 'sid
     if (ent.isDirectory) return '📁';
     if (ent.kind === 'markdown') return '📝';
     if (ent.kind === 'pdf') return '📕';
+    if (ent.kind === 'docx' || ent.kind === 'doc') return '📘';
+    if (ent.kind === 'xlsx') return '📗';
+    if (ent.kind === 'pptx') return '📙';
     if (ent.kind === 'video') return '🎬';
     if (ent.kind === 'audio') return '🎵';
     if (ent.kind === 'image') return '🖼';
@@ -1414,6 +1839,7 @@ async function openConversation(convId, { scrollToLatestUser = true } = {}) {
   state.mode = 'sessions';
   state.activeConvId = convId;
   state.autoFollow = true;
+  markConversationAsRead(convId);
   localStorage.setItem('amp-mode', 'sessions');
   localStorage.setItem('amp-last-conv', convId);
   syncUrlState({ conv: convId, flavor: state.flavor });
@@ -1429,6 +1855,7 @@ async function openConversation(convId, { scrollToLatestUser = true } = {}) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     state.currentViewData = data;
+    markConversationAsRead(convId, data.view?.summary?.totalSteps || 0);
     state.currentBaseDir = data.baseDir || meta?.workspaceUri || '';
     if (data.flavor) state.flavor = data.flavor;
     if (meta?.title) el('doc-title').textContent = meta.title;
@@ -1593,17 +2020,46 @@ function populatePreviewBody(bodyEl, info, codeViewId) {
   }
 
   if (info.kind === 'pdf') {
-    const hashSuffix = info.hash ? `#${info.hash}` : '';
-    const pdfSrc = `${info.rawUrl}${hashSuffix}`;
-    bodyEl.innerHTML = `<div class="media-preview-stage">
-      <div class="media-toolbar">
-        <span>PDF · ${escapeHtml(formatFileSize(info.size))}</span>
-        <div style="display:flex;gap:6px;">
-          <a href="${escapeHtml(pdfSrc)}" target="_blank" rel="noopener noreferrer" class="code-mini-btn" style="text-decoration:none;" title="${escapeHtml(t('pdfOpenTabTip'))}">${escapeHtml(t('pdfOpenTabBtn'))}</a>
-        </div>
-      </div>
-      <iframe class="media-pdf-frame" src="${escapeHtml(pdfSrc)}" title="${escapeHtml(info.filename)}"></iframe>
-    </div>`;
+    renderCustomPdfViewer(bodyEl, {
+      rawUrl: info.rawUrl,
+      sizeText: formatFileSize(info.size),
+      hash: info.hash || '',
+      apiFetch,
+    });
+    return;
+  }
+
+  if (info.kind === 'docx' || info.kind === 'doc') {
+    renderWordViewer(bodyEl, {
+      rawUrl: info.rawUrl,
+      filePath: info.path || '',
+      baseDir: info.baseDir || '',
+      ext: info.ext || (info.kind === 'doc' ? '.doc' : '.docx'),
+      sizeText: formatFileSize(info.size),
+      apiFetch,
+    });
+    return;
+  }
+
+  if (info.kind === 'xlsx') {
+    renderSpreadsheetViewer(bodyEl, {
+      rawUrl: info.rawUrl,
+      ext: info.ext || '.xlsx',
+      sizeText: formatFileSize(info.size),
+      apiFetch,
+    });
+    return;
+  }
+
+  if (info.kind === 'pptx') {
+    renderPresentationViewer(bodyEl, {
+      rawUrl: info.rawUrl,
+      filePath: info.path || '',
+      baseDir: info.baseDir || '',
+      ext: info.ext || '.pptx',
+      sizeText: formatFileSize(info.size),
+      apiFetch,
+    });
     return;
   }
 
@@ -1865,8 +2321,9 @@ async function openInPopupModal(rawHref, baseDir = '') {
     state.popupCurrent = { ...info, rawHref };
     el('popup-preview-title').textContent = info.filename;
     el('popup-preview-path').textContent = info.path + (info.hash ? `#${info.hash}` : '');
+    const isBinaryViewer = ['pdf', 'docx', 'doc', 'xlsx', 'pptx', 'video', 'audio', 'image'].includes(info.kind);
     el('popup-wrap-btn')?.classList.toggle('hidden', info.kind !== 'code');
-    el('popup-copy-btn')?.classList.toggle('hidden', info.kind === 'pdf' || info.kind === 'video' || info.kind === 'audio');
+    el('popup-copy-btn')?.classList.toggle('hidden', isBinaryViewer);
     populatePreviewBody(body, info, 'popup-code-view');
   } catch (err) {
     body.innerHTML = `<div class="notice-banner error">${escapeHtml(err.message)}</div>`;
@@ -1908,10 +2365,11 @@ async function openInSidePreview(rawHref, baseDir = '', { pushHistory = true } =
     el('side-preview-path').textContent = info.path;
     el('side-preview-path').title = info.path;
 
-    const promotable = info.kind === 'markdown' || info.kind === 'pdf' || info.kind === 'video' || info.kind === 'audio' || info.kind === 'csv';
+    const promotable = ['markdown', 'pdf', 'docx', 'doc', 'xlsx', 'pptx', 'video', 'audio', 'csv'].includes(info.kind);
+    const isBinaryViewer = ['pdf', 'docx', 'doc', 'xlsx', 'pptx', 'video', 'audio', 'image'].includes(info.kind);
     el('side-promote-btn')?.classList.toggle('hidden', !promotable);
     el('side-wrap-btn')?.classList.toggle('hidden', info.kind !== 'code');
-    el('side-copy-btn')?.classList.toggle('hidden', info.kind === 'pdf' || info.kind === 'video' || info.kind === 'audio');
+    el('side-copy-btn')?.classList.toggle('hidden', isBinaryViewer);
 
     populatePreviewBody(body, info, 'side-code-view');
   } catch (err) {
@@ -2415,7 +2873,7 @@ async function commitDocRename(docId, newTitle) {
 
 async function loadInitialWorkspaceContent() {
   await loadFlavors();
-  await Promise.all([loadConversations(), loadCustomPreviews()]);
+  await Promise.all([loadConversations(), loadCustomPreviews(), loadServerCustomPalettes()]);
 
   const params = new URLSearchParams(window.location.search);
   const queryConv = params.get('conv') || (isSidecar ? window.sidecar.conversationId : '');
@@ -3010,16 +3468,57 @@ async function bootstrap() {
 
   el('prefs-menu')?.addEventListener('click', (e) => {
     e.stopPropagation();
+    if (e.target.closest('[data-palette-rename-input]')) return;
+
     const langBtn = e.target.closest('[data-pref-lang]');
     if (langBtn) {
       applyLanguage(langBtn.dataset.prefLang);
       return;
     }
+
+    const sizeDeltaBtn = e.target.closest('[data-font-size-delta]');
+    if (sizeDeltaBtn) {
+      const delta = Number(sizeDeltaBtn.dataset.fontSizeDelta) || 0;
+      state.fontSize = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, state.fontSize + delta));
+      localStorage.setItem('amp-font-size', String(state.fontSize));
+      applyAppearance();
+      return;
+    }
+
+    if (e.target.closest('[data-font-size-reset]')) {
+      state.fontSize = DEFAULT_FONT_SIZE;
+      localStorage.setItem('amp-font-size', String(DEFAULT_FONT_SIZE));
+      applyAppearance();
+      return;
+    }
+
+    const togglePickerBtn = e.target.closest('[data-toggle-font-picker]');
+    if (togglePickerBtn) {
+      const which = togglePickerBtn.dataset.toggleFontPicker || 'latin';
+      state.openFontPicker = state.openFontPicker === which ? null : which;
+      renderPrefsMenu();
+      return;
+    }
+
     const proseBtn = e.target.closest('[data-pref-prose]');
     if (proseBtn) {
-      state.prose = proseBtn.dataset.prefProse === 'serif' ? 'serif' : 'sans';
-      localStorage.setItem('amp-prose', state.prose);
-      applyAppearance();
+      const targetFont = proseBtn.dataset.prefProse;
+      if (LATIN_FONTS.some((f) => f.id === targetFont)) {
+        state.prose = targetFont;
+        localStorage.setItem('amp-prose', state.prose);
+        applyAppearance();
+      }
+      return;
+    }
+
+    const proseCjkBtn = e.target.closest('[data-pref-prose-cjk]');
+    if (proseCjkBtn) {
+      const targetCjk = proseCjkBtn.dataset.prefProseCjk;
+      if (CJK_FONTS.some((f) => f.id === targetCjk)) {
+        state.proseCjk = targetCjk;
+        localStorage.setItem('amp-prose-cjk', state.proseCjk);
+        applyAppearance();
+      }
       return;
     }
     const widthBtn = e.target.closest('[data-pref-width]');
@@ -3043,28 +3542,72 @@ async function bootstrap() {
       applyAppearance();
       return;
     }
+    if (e.target.closest('[data-add-custom-palette]')) {
+      createNewCustomPalette();
+      return;
+    }
+    const renamePalBtn = e.target.closest('[data-rename-palette]');
+    if (renamePalBtn) {
+      state.renamingPaletteId = renamePalBtn.dataset.renamePalette;
+      renderPrefsMenu();
+      return;
+    }
+    const delPalBtn = e.target.closest('[data-delete-palette]');
+    if (delPalBtn) {
+      deleteCustomPalette(delPalBtn.dataset.deletePalette);
+      return;
+    }
     const palBtn = e.target.closest('[data-theme-palette]');
     if (palBtn) {
       state.palette = palBtn.dataset.themePalette;
+      state.renamingPaletteId = null;
       localStorage.setItem('amp-palette', state.palette);
       applyAppearance();
       return;
     }
     const rgbSlotBtn = e.target.closest('[data-rgb-slot]');
     if (rgbSlotBtn) {
-      state.customColors.activeSlot = rgbSlotBtn.dataset.rgbSlot === 'accent' ? 'accent' : 'bg';
-      saveCustomColors();
+      state.rgbActiveSlot = rgbSlotBtn.dataset.rgbSlot === 'accent' ? 'accent' : 'bg';
       renderPrefsMenu();
       return;
     }
     if (e.target.closest('[data-rgb-reset]')) {
-      state.customColors = { ...DEFAULT_CUSTOM_COLORS, activeSlot: state.customColors.activeSlot };
-      saveCustomColors();
-      applyAppearance();
+      const activeCustom = getActiveCustomPalette();
+      if (activeCustom) {
+        activeCustom.lightBg = DEFAULT_CUSTOM_COLORS.lightBg;
+        activeCustom.darkBg = DEFAULT_CUSTOM_COLORS.darkBg;
+        activeCustom.accent = DEFAULT_CUSTOM_COLORS.accent;
+        saveCustomPalettes();
+        applyAppearance();
+      }
+    }
+  });
+
+  el('prefs-menu')?.addEventListener('keydown', (e) => {
+    const renInp = e.target.closest('[data-palette-rename-input]');
+    if (!renInp) return;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commitPaletteRename(renInp.dataset.paletteRenameInput, renInp.value);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      state.renamingPaletteId = null;
+      renderPrefsMenu();
+    }
+  });
+
+  el('prefs-menu')?.addEventListener('focusout', (e) => {
+    const renInp = e.target.closest('[data-palette-rename-input]');
+    if (!renInp) return;
+    const id = renInp.dataset.paletteRenameInput;
+    if (state.renamingPaletteId === id) {
+      commitPaletteRename(id, renInp.value);
     }
   });
 
   el('prefs-menu')?.addEventListener('input', (e) => {
+    if (e.target.closest('[data-palette-rename-input]')) return;
     const picker = e.target.closest('[data-rgb-picker]');
     if (picker && isValidHex(picker.value)) {
       applyCustomSlotColorLive(picker.value);
@@ -3082,7 +3625,10 @@ async function bootstrap() {
     const numCh = e.target.closest('[data-rgb-num]');
     if (rangeCh || numCh) {
       const menu = el('prefs-menu');
-      const curHex = state.customColors.activeSlot === 'accent' ? state.customColors.accent : getActiveCustomBgHex();
+      const activeCustom = getActiveCustomPalette();
+      if (!activeCustom) return;
+      const { bgHex, accentHex } = getPaletteColorsFor(activeCustom);
+      const curHex = state.rgbActiveSlot === 'accent' ? accentHex : bgHex;
       const rgb = hexToRgb(curHex);
       const ch = rangeCh ? rangeCh.dataset.rgbChannel : numCh.dataset.rgbNum;
       rgb[ch] = clampByte((rangeCh || numCh).value);
@@ -3181,10 +3727,10 @@ async function bootstrap() {
     const file = e.dataTransfer?.files?.[0];
     if (!file) return;
     const lowerName = (file.name || '').toLowerCase();
-    const isBinaryExt = /\.(pdf|mp4|webm|mov|m4v|ogv|mkv|avi|mp3|wav|flac|ogg|oga|m4a|aac|opus|png|jpg|jpeg|gif|webp|bmp|ico|avif)$/i.test(lowerName);
+    const isBinaryExt = /\.(pdf|docx|doc|xlsx|xls|ods|pptx|ppt|mp4|webm|mov|m4v|ogv|mkv|avi|mp3|wav|flac|ogg|oga|m4a|aac|opus|png|jpg|jpeg|gif|webp|bmp|ico|avif)$/i.test(lowerName);
     if (isBinaryExt) {
       el('paste-modal')?.classList.remove('hidden');
-      showToast(getLang() === 'zh' ? '请点击「📂 浏览…」选择该媒体文件以直接流式预览' : 'Click "📂 Browse…" to stream binary PDF/media files directly from disk');
+      showToast(getLang() === 'zh' ? '请点击「📂 浏览…」选择该本地文档/媒体文件以直接流式预览' : 'Click "📂 Browse…" to open binary PDF / Office / media files directly from disk');
       return;
     }
     const text = await file.text();
@@ -3269,7 +3815,9 @@ async function bootstrap() {
     }
     else if (k === 'f') {
       e.preventDefault();
-      state.prose = state.prose === 'sans' ? 'serif' : 'sans';
+      const curIdx = LATIN_FONTS.findIndex((f) => f.id === state.prose);
+      const nextFont = LATIN_FONTS[(curIdx + 1) % LATIN_FONTS.length] || LATIN_FONTS[0];
+      state.prose = nextFont.id;
       localStorage.setItem('amp-prose', state.prose);
       applyAppearance();
     }

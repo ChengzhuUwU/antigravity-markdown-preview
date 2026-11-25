@@ -106,7 +106,7 @@ test('classifyHref and isCodeFilePath identify relative docs, Python files, conv
   assert.equal(convLink.kind, 'conversation');
   assert.equal(convLink.convId, 'fc6930db-d01d-441e-896b-9a9f0f7405f3');
 
-  const relDoc = classifyHref('isaacgymenvs/README.md');
+  const relDoc = classifyHref('packages/core/README.md');
   assert.equal(relDoc.kind, 'local');
   assert.equal(relDoc.isCode, false);
   assert.equal(relDoc.isPreviewable, true);
@@ -115,11 +115,11 @@ test('classifyHref and isCodeFilePath identify relative docs, Python files, conv
   assert.equal(isPreviewableFilePath('rollouts/episode_01.mp4'), true);
   assert.equal(isPreviewableFilePath('audio/narration.mp3'), true);
   assert.equal(isPreviewableFilePath('metrics/ablation.csv'), true);
-  assert.equal(isPreviewableFilePath('isaacgymenvs'), true);
+  assert.equal(isPreviewableFilePath('packages/core'), true);
   assert.equal(isPreviewableFilePath('weights/model.pt'), false);
   assert.equal(isPreviewableFilePath('archive/bundle.zip'), false);
 
-  const pyFile = classifyHref('isaacgymenvs/train.py#L10-L25');
+  const pyFile = classifyHref('packages/core/router.py#L10-L25');
   assert.equal(pyFile.kind, 'local');
   assert.equal(pyFile.isCode, true);
   assert.equal(isCodeFilePath('E:\\Projects\\demo\\model.py'), true);
@@ -159,13 +159,13 @@ test('buildNormalizedView extracts subagentId and computes /context + /usage tel
 test('resolveSafeFilePath, locateDroppedFileOnDisk, and CustomPreviewStore resolve dropped files, relative links, bare files, and manage docs', () => {
   const root = mkdtempSync(join(tmpdir(), 'amp-rel-'));
   try {
-    mkdirSync(join(root, 'isaacgymenvs', 'pce'), { recursive: true });
-    const readmeText = '# HUAWEI Precision\n[Sub](isaacgymenvs/README.md)\n[Contracts](pce_contracts.py#L10-L20)\n![pic](isaacgymenvs/pic.svg)';
+    mkdirSync(join(root, 'engine', 'planner'), { recursive: true });
+    const readmeText = '# Aurora Hybrid Search\n[Sub](engine/README.md)\n[Planner](query_planner.py#L10-L20)\n![pic](engine/pic.svg)';
     writeFileSync(join(root, 'README.md'), readmeText);
-    writeFileSync(join(root, 'isaacgymenvs', 'README.md'), '# Sub README');
-    writeFileSync(join(root, 'isaacgymenvs', 'train.py'), 'print("ok")\n');
-    writeFileSync(join(root, 'isaacgymenvs', 'pce', 'pce_contracts.py'), 'class Contract:\n    pass\n');
-    writeFileSync(join(root, 'isaacgymenvs', 'pic.svg'), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+    writeFileSync(join(root, 'engine', 'README.md'), '# Sub README');
+    writeFileSync(join(root, 'engine', 'router.py'), 'print("ok")\n');
+    writeFileSync(join(root, 'engine', 'planner', 'query_planner.py'), 'class QueryPlanner:\n    pass\n');
+    writeFileSync(join(root, 'engine', 'pic.svg'), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
 
     // 1. Single-line pasted path auto-loads file and sets baseDir
     const store = new CustomPreviewStore({ persistPath: '' });
@@ -186,21 +186,21 @@ test('resolveSafeFilePath, locateDroppedFileOnDisk, and CustomPreviewStore resol
     assert.equal(dropped.baseDir, root);
 
     // 3. Relative link + line anchor resolution
-    const resolvedSub = resolveSafeFilePath('isaacgymenvs/train.py#L1-L5', dropped.baseDir);
+    const resolvedSub = resolveSafeFilePath('engine/router.py#L1-L5', dropped.baseDir);
     assert.equal(resolvedSub.status, 200);
-    assert.equal(resolvedSub.resolvedPath, join(root, 'isaacgymenvs', 'train.py'));
+    assert.equal(resolvedSub.resolvedPath, join(root, 'engine', 'router.py'));
     assert.equal(resolvedSub.hashPart, 'L1-L5');
 
-    // 4. Bare filename inside nested project subdirectory (e.g. `pce_contracts.py#L10-L20`)
-    const resolvedBare = resolveSafeFilePath('pce_contracts.py#L10-L20', dropped.baseDir);
+    // 4. Bare filename inside nested project subdirectory (e.g. `query_planner.py#L10-L20`)
+    const resolvedBare = resolveSafeFilePath('query_planner.py#L10-L20', dropped.baseDir);
     assert.equal(resolvedBare.status, 200);
-    assert.equal(resolvedBare.resolvedPath, join(root, 'isaacgymenvs', 'pce', 'pce_contracts.py'));
+    assert.equal(resolvedBare.resolvedPath, join(root, 'engine', 'planner', 'query_planner.py'));
     assert.equal(resolvedBare.hashPart, 'L10-L20');
 
     // 5. Directory link resolves to README.md inside directory
-    const resolvedDir = resolveSafeFilePath('isaacgymenvs', dropped.baseDir);
+    const resolvedDir = resolveSafeFilePath('engine', dropped.baseDir);
     assert.equal(resolvedDir.status, 200);
-    assert.equal(resolvedDir.resolvedPath, join(root, 'isaacgymenvs', 'README.md'));
+    assert.equal(resolvedDir.resolvedPath, join(root, 'engine', 'README.md'));
 
     // 6. Docs/Clips management & disk persistence across restarts: excerpt, rename, reorder, delete
     const persistFile = join(root, 'store-data', 'docs-store.json');
@@ -776,6 +776,114 @@ test('Live hook events enrich /api/conversations active status and hookState in 
       const stoppedItem = afterStop.conversations.find((c) => c.id === targetId);
       assert.equal(stoppedItem.hookState?.phase, 'stopped');
     }
+  } finally {
+    engine.close();
+    await new Promise((r) => server.close(r));
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('Office suite (.docx, .xlsx, .pptx) & custom PDF.js vendor bundles work end-to-end offline', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'amp-office-'));
+  const XLSX = (await import('xlsx')).default || (await import('xlsx'));
+  const JSZip = (await import('jszip')).default || (await import('jszip'));
+  const { APPLE_SPINNER_SVG } = await import('../public/js/doc-viewers.js');
+
+  assert.match(APPLE_SPINNER_SVG, /class="apple-spinner"/);
+
+  // 1. Verify markdown link previewability & server file classification
+  for (const rel of ['docs/spec.docx', 'docs/legacy.doc', 'metrics/table.xlsx', 'metrics/old.xls', 'metrics/sheet.ods', 'slides/talk.pptx', 'slides/old.ppt']) {
+    assert.equal(isPreviewableFilePath(rel), true, `${rel} should be previewable`);
+  }
+  assert.equal(classifyFile('spec.docx').kind, 'docx');
+  assert.equal(classifyFile('legacy.doc').kind, 'doc');
+  assert.equal(classifyFile('table.xlsx').kind, 'xlsx');
+  assert.equal(classifyFile('old.xls').kind, 'xlsx');
+  assert.equal(classifyFile('sheet.ods').kind, 'xlsx');
+  assert.equal(classifyFile('talk.pptx').kind, 'pptx');
+  assert.equal(classifyFile('old.ppt').kind, 'pptx');
+
+  // 2. Generate real .xlsx, .docx, and .pptx files in temp directory
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([
+    ['Model', 'Score'],
+    ['Antigravity', 99.8],
+  ]);
+  XLSX.utils.book_append_sheet(wb, ws, 'Benchmarks');
+  writeFileSync(join(tmp, 'bench.xlsx'), XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+
+  const docxZip = new JSZip();
+  docxZip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  docxZip.file('word/document.xml', '<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Hello Word</w:t></w:r></w:p></w:body></w:document>');
+  writeFileSync(join(tmp, 'report.docx'), await docxZip.generateAsync({ type: 'nodebuffer' }));
+
+  const pptxZip = new JSZip();
+  pptxZip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  pptxZip.file('ppt/presentation.xml', '<?xml version="1.0" encoding="UTF-8"?><p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldSz cx="12192000" cy="6858000"/></p:presentation>');
+  pptxZip.file('ppt/slides/slide1.xml', '<?xml version="1.0" encoding="UTF-8"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:sp><p:spPr><a:xfrm><a:off x="914400" y="914400"/><a:ext cx="8000000" cy="1500000"/></a:xfrm></p:spPr><p:txBody><a:p><a:r><a:t>Slide 1 Title</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>');
+  writeFileSync(join(tmp, 'deck.pptx'), await pptxZip.generateAsync({ type: 'nodebuffer' }));
+
+  const { server, port, engine } = await startStandaloneServer({
+    port: 0,
+    storePersistPath: join(tmp, 'docs-store.json'),
+    authPersistPath: join(tmp, 'auth-config.json'),
+  });
+
+  try {
+    // 3. Verify offline vendor bundles are served cleanly
+    for (const asset of ['pdf.min.mjs', 'pdf.worker.min.mjs', 'jszip.min.js', 'docx-preview.min.js', 'xlsx.full.min.js']) {
+      const vRes = await fetch(`http://127.0.0.1:${port}/vendor/${asset}`, { method: 'HEAD' });
+      assert.equal(vRes.status, 200, `/vendor/${asset} must be served offline`);
+    }
+
+    // 4. Verify /api/file-info, /api/previews, and /api/raw-file for .docx, .xlsx, .pptx
+    for (const [fname, expectedKind, mimeSubstr] of [
+      ['report.docx', 'docx', 'wordprocessingml'],
+      ['bench.xlsx', 'xlsx', 'spreadsheetml'],
+      ['deck.pptx', 'pptx', 'presentationml'],
+    ]) {
+      const fi = await (await fetch(`http://127.0.0.1:${port}/api/file-info?path=${fname}&base=${encodeURIComponent(tmp)}`)).json();
+      assert.equal(fi.kind, expectedKind);
+      assert.equal(fi.content, undefined);
+
+      const prevDoc = await (await fetch(`http://127.0.0.1:${port}/api/previews`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath: join(tmp, fname) }),
+      })).json();
+      assert.equal(prevDoc.parsed.mode, 'media');
+      assert.equal(prevDoc.parsed.mediaKind, expectedKind);
+      assert.equal(prevDoc.rawText, '');
+
+      const rawRes = await fetch(`http://127.0.0.1:${port}/api/raw-file?path=${fname}&base=${encodeURIComponent(tmp)}`);
+      assert.equal(rawRes.status, 200);
+      assert.match(rawRes.headers.get('content-type') || '', new RegExp(mimeSubstr));
+    }
+
+    // 5. Verify /api/office-to-pdf security guard on restricted paths
+    const blockedConv = await fetch(`http://127.0.0.1:${port}/api/office-to-pdf?path=${encodeURIComponent('C:\\Windows\\System32\\drivers\\etc\\hosts')}`);
+    assert.equal(blockedConv.status, 403);
+
+    // 6. Verify multi-candidate named Custom RGB palettes API persists and sanitizes entries
+    const putPalRes = await (await fetch(`http://127.0.0.1:${port}/api/custom-palettes`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        palettes: [
+          { id: 'custom-nord', name: 'Nord Frost', lightBg: '#f4f7fb', darkBg: '#161b24', accent: '#4c82d6' },
+          { id: 'custom-rose', name: 'Warm Rose', lightBg: '#fdf6f7', darkBg: '#1c1316', accent: '#d95b78' },
+          { id: 'invalid-id', name: 'Ignored', lightBg: '#ffffff', darkBg: '#000000', accent: '#ff0000' },
+        ],
+      }),
+    })).json();
+    assert.equal(putPalRes.ok, true);
+    assert.equal(putPalRes.palettes.length, 2);
+    assert.equal(putPalRes.palettes[0].name, 'Nord Frost');
+
+    const getPalRes = await (await fetch(`http://127.0.0.1:${port}/api/custom-palettes`)).json();
+    assert.equal(getPalRes.palettes.length, 2);
+    assert.equal(getPalRes.palettes[1].name, 'Warm Rose');
+    assert.equal(existsSync(join(tmp, 'custom-palettes.json')), true);
   } finally {
     engine.close();
     await new Promise((r) => server.close(r));

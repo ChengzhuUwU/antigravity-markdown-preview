@@ -16,6 +16,7 @@ import {
 } from './transcript.mjs';
 import { CustomPreviewStore } from './custom-preview.mjs';
 import { PreviewAuthManager } from './auth.mjs';
+import { convertOfficeFileToPdfCached, resolveCachedOfficePdfByName } from './office-convert.mjs';
 
 const HERE = resolve(fileURLToPath(import.meta.url), '..');
 const PUBLIC_DIR = resolve(HERE, '..', 'public');
@@ -38,6 +39,13 @@ const MIME_TYPES = {
   '.ico': 'image/x-icon',
   '.avif': 'image/avif',
   '.pdf': 'application/pdf',
+  '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  '.doc': 'application/msword',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.xls': 'application/vnd.ms-excel',
+  '.ods': 'application/vnd.oasis.opendocument.spreadsheet',
+  '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  '.ppt': 'application/vnd.ms-powerpoint',
   '.mp4': 'video/mp4',
   '.m4v': 'video/mp4',
   '.webm': 'video/webm',
@@ -61,6 +69,10 @@ const MIME_TYPES = {
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico', '.avif']);
 const PDF_EXTS = new Set(['.pdf']);
+const DOCX_EXTS = new Set(['.docx']);
+const DOC_LEGACY_EXTS = new Set(['.doc']);
+const XLSX_EXTS = new Set(['.xlsx', '.xls', '.ods']);
+const PPTX_EXTS = new Set(['.pptx', '.ppt']);
 const VIDEO_EXTS = new Set(['.mp4', '.webm', '.mov', '.m4v', '.ogv', '.mkv', '.avi']);
 const AUDIO_EXTS = new Set(['.mp3', '.wav', '.flac', '.ogg', '.oga', '.m4a', '.aac', '.opus', '.weba']);
 const CSV_EXTS = new Set(['.csv', '.tsv']);
@@ -287,6 +299,10 @@ export function classifyFile(filePath) {
   if (MARKDOWN_EXTS.has(ext)) return { kind: 'markdown', ext, lang: 'markdown' };
   if (IMAGE_EXTS.has(ext)) return { kind: 'image', ext, lang: '' };
   if (PDF_EXTS.has(ext)) return { kind: 'pdf', ext, lang: '' };
+  if (DOCX_EXTS.has(ext)) return { kind: 'docx', ext, lang: '' };
+  if (DOC_LEGACY_EXTS.has(ext)) return { kind: 'doc', ext, lang: '' };
+  if (XLSX_EXTS.has(ext)) return { kind: 'xlsx', ext, lang: '' };
+  if (PPTX_EXTS.has(ext)) return { kind: 'pptx', ext, lang: '' };
   if (VIDEO_EXTS.has(ext)) return { kind: 'video', ext, lang: '' };
   if (AUDIO_EXTS.has(ext)) return { kind: 'audio', ext, lang: '' };
   if (CSV_EXTS.has(ext)) return { kind: 'csv', ext, lang: ext === '.tsv' ? 'tsv' : 'csv' };
@@ -543,10 +559,55 @@ export function createPreviewEngine({
   const authManager = new PreviewAuthManager(authPersistPath !== undefined ? { persistPath: authPersistPath } : {});
   const btwNotesPath = customStore.persistPath ? join(dirname(customStore.persistPath), 'btw-notes.json') : '';
   const pinnedSessionsPath = customStore.persistPath ? join(dirname(customStore.persistPath), 'pinned-sessions.json') : '';
+  const customPalettesPath = customStore.persistPath ? join(dirname(customStore.persistPath), 'custom-palettes.json') : '';
   const btwNotesByConv = new Map();
   let btwNotesMtimeMs = 0;
   let pinnedSessionIds = [];
   let pinnedMtimeMs = 0;
+  let customPalettesList = [];
+  let customPalettesMtimeMs = 0;
+
+  const sanitizeCustomPalettes = (arr) => {
+    if (!Array.isArray(arr)) return [];
+    const hexRe = /^#[0-9a-fA-F]{6}$/;
+    const seen = new Set();
+    const out = [];
+    for (const item of arr) {
+      if (!item || typeof item !== 'object') continue;
+      const id = String(item.id || '').trim();
+      if (!/^custom-[a-zA-Z0-9_-]{1,40}$/.test(id) || seen.has(id)) continue;
+      const lightBg = String(item.lightBg || '').trim().toLowerCase();
+      const darkBg = String(item.darkBg || '').trim().toLowerCase();
+      const accent = String(item.accent || '').trim().toLowerCase();
+      if (!hexRe.test(lightBg) || !hexRe.test(darkBg) || !hexRe.test(accent)) continue;
+      const name = String(item.name || '').trim().slice(0, 40) || 'Custom';
+      seen.add(id);
+      out.push({ id, name, lightBg, darkBg, accent });
+      if (out.length >= 50) break;
+    }
+    return out;
+  };
+
+  const loadCustomPalettesFromDisk = () => {
+    if (!customPalettesPath || !existsSync(customPalettesPath)) return;
+    try {
+      const st = statSync(customPalettesPath);
+      if (st.mtimeMs <= customPalettesMtimeMs + 1) return;
+      const parsed = JSON.parse(readFileSync(customPalettesPath, 'utf-8'));
+      customPalettesList = sanitizeCustomPalettes(parsed);
+      customPalettesMtimeMs = st.mtimeMs;
+    } catch {}
+  };
+  loadCustomPalettesFromDisk();
+
+  const saveCustomPalettesToDisk = () => {
+    if (!customPalettesPath) return;
+    try {
+      mkdirSync(dirname(customPalettesPath), { recursive: true });
+      writeFileSync(customPalettesPath, JSON.stringify(customPalettesList, null, 2), 'utf-8');
+      customPalettesMtimeMs = statSync(customPalettesPath).mtimeMs;
+    } catch {}
+  };
 
   const loadPinnedFromDisk = () => {
     if (!pinnedSessionsPath || !existsSync(pinnedSessionsPath)) return;
@@ -940,6 +1001,24 @@ export function createPreviewEngine({
       }
     }
 
+    if (pathname === '/api/custom-palettes') {
+      loadCustomPalettesFromDisk();
+      if (req.method === 'GET') {
+        return sendJson(res, 200, { palettes: customPalettesList });
+      }
+      if (req.method === 'PUT' || req.method === 'POST') {
+        try {
+          const body = await readJsonBody(req);
+          customPalettesList = sanitizeCustomPalettes(body.palettes);
+          saveCustomPalettesToDisk();
+          broadcastEvent('custom-palettes', { palettes: customPalettesList });
+          return sendJson(res, 200, { ok: true, palettes: customPalettesList });
+        } catch (err) {
+          return sendJson(res, 400, { error: err.message });
+        }
+      }
+    }
+
     const viewMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/view$/);
     if (req.method === 'GET' && viewMatch) {
       const convId = decodeURIComponent(viewMatch[1]);
@@ -1129,7 +1208,7 @@ export function createPreviewEngine({
           ext: info.ext,
           rawUrl,
         };
-        if (info.kind === 'image' || info.kind === 'pdf' || info.kind === 'video' || info.kind === 'audio') {
+        if (['image', 'pdf', 'docx', 'doc', 'xlsx', 'pptx', 'video', 'audio'].includes(info.kind)) {
           return sendJson(res, 200, result);
         }
         if (st.size <= 2 * 1024 * 1024) {
@@ -1156,6 +1235,50 @@ export function createPreviewEngine({
       } catch (err) {
         return sendJson(res, 500, { error: err.message });
       }
+    }
+
+    // Convert Office (.pptx, .ppt, .doc, .docx) to cached PDF when LibreOffice or MS Office COM is available
+    if (req.method === 'GET' && pathname === '/api/office-to-pdf') {
+      const targetPath = url.searchParams.get('path') || '';
+      const baseDir = url.searchParams.get('base') || '';
+      const check = resolveSafeFilePath(targetPath, baseDir);
+      if (check.error) {
+        return sendJson(res, check.status || 400, { error: check.error });
+      }
+      try {
+        const resConv = await convertOfficeFileToPdfCached(check.resolvedPath);
+        if (resConv.converted && resConv.cacheFileName) {
+          return sendJson(res, 200, {
+            ok: true,
+            converted: true,
+            converter: resConv.converter,
+            pdfUrl: `/api/office-pdf-cache/${encodeURIComponent(resConv.cacheFileName)}`,
+          });
+        }
+        return sendJson(res, 200, { ok: true, converted: false, reason: resConv.reason || 'Unavailable' });
+      } catch (err) {
+        return sendJson(res, 200, { ok: true, converted: false, reason: err.message });
+      }
+    }
+
+    const officeCacheMatch = pathname.match(/^\/api\/office-pdf-cache\/([a-f0-9]{40}\.pdf)$/i);
+    if ((req.method === 'GET' || req.method === 'HEAD') && officeCacheMatch) {
+      const pdfFile = resolveCachedOfficePdfByName(officeCacheMatch[1]);
+      if (!pdfFile) return sendJson(res, 404, { error: 'Cached PDF not found' });
+      const st = statSync(pdfFile);
+      res.writeHead(200, {
+        'Content-Type': 'application/pdf',
+        'Content-Length': st.size,
+        'Cache-Control': 'private, max-age=3600',
+      });
+      if (req.method === 'HEAD') {
+        res.end();
+        return;
+      }
+      const stream = createReadStream(pdfFile);
+      req.on('close', () => stream.destroy());
+      stream.pipe(res);
+      return;
     }
 
     // Streaming raw file & media endpoint with HTTP Range (206 Partial Content) support for video/audio/PDF
@@ -1279,7 +1402,7 @@ export function createPreviewEngine({
             `$top.ShowInTaskbar = $false`,
             `$top.Opacity = 0`,
             `$dlg = New-Object System.Windows.Forms.OpenFileDialog`,
-            `$dlg.Filter = 'Docs & Media (*.md;*.markdown;*.pdf;*.mp4;*.webm;*.mov;*.mp3;*.wav;*.png;*.jpg;*.svg;*.csv;*.jsonl;*.txt)|*.md;*.markdown;*.pdf;*.mp4;*.webm;*.mov;*.mp3;*.wav;*.png;*.jpg;*.jpeg;*.svg;*.csv;*.jsonl;*.txt|All Files (*.*)|*.*'`,
+            `$dlg.Filter = 'Docs, Office & Media (*.md;*.pdf;*.docx;*.xlsx;*.pptx;*.mp4;*.webm;*.mp3;*.png;*.jpg;*.svg;*.csv;*.jsonl)|*.md;*.markdown;*.pdf;*.docx;*.doc;*.xlsx;*.xls;*.ods;*.pptx;*.ppt;*.mp4;*.webm;*.mov;*.mp3;*.wav;*.png;*.jpg;*.jpeg;*.svg;*.csv;*.jsonl;*.txt|All Files (*.*)|*.*'`,
             `$dlg.Title = 'Select File to Preview'`,
             `if ($dlg.ShowDialog($top) -eq 'OK') { Write-Output $dlg.FileName }`,
             `$top.Dispose()`,
@@ -1449,7 +1572,7 @@ export function createPreviewEngine({
       return sendText(res, 200, 'window.__standalonePreviewMode = true;', 'application/javascript; charset=utf-8');
     }
 
-    if (req.method === 'GET') {
+    if (req.method === 'GET' || req.method === 'HEAD') {
       const relPath = pathname === '/' ? 'index.html' : pathname.replace(/^\/+/, '');
       const fullPath = resolve(PUBLIC_DIR, relPath);
       if (!fullPath.startsWith(PUBLIC_DIR)) {
@@ -1459,10 +1582,19 @@ export function createPreviewEngine({
         const st = statSync(fullPath);
         if (st.isFile()) {
           const ext = extname(fullPath).toLowerCase();
-          return res.writeHead(200, {
+          res.writeHead(200, {
             'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
+            'Content-Length': st.size,
             'Cache-Control': 'no-store',
-          }).end(readFileSync(fullPath));
+          });
+          if (req.method === 'HEAD') {
+            res.end();
+            return;
+          }
+          const stream = createReadStream(fullPath);
+          req.on('close', () => stream.destroy());
+          stream.pipe(res);
+          return;
         }
       }
       return sendText(res, 404, 'Not Found');

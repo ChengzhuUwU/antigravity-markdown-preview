@@ -2,6 +2,27 @@
 
 All notable changes to **Antigravity Session Preview (`agy-session-preview`)** will be documented in this file.
 
+## [0.4.0] - 2026-11-26
+
+### Added
+- **Theme-Native Custom `PDF.js` & Offline Office Suite (`Word`, `Excel`, `PowerPoint`) Previews (`public/js/doc-viewers.js`, `server/office-convert.mjs`)**:
+  - Replaced native browser `<iframe>` PDF rendering with an offline, lazy-loaded **`PDF.js v4`** viewer matching all `2 × 8 + Custom RGB` themes, supporting HiDPI canvas rendering, selectable `TextLayer`, collapsible page thumbnails, `#page=N` deep links, `↔ Width` / `⊡ Page` fit modes, 90° rotation, and eye-comfort **`◐ Tint` dark-paper filter**.
+  - **Word (`.docx` / `.doc`)**: Offline `docx-preview` + `JSZip` paper layout viewer with zoom, width fit, and `◐ Tint` dark-paper filter (with local Word/LibreOffice -> PDF conversion fallback for legacy binary `.doc`).
+  - **Excel (`.xlsx` / `.xls` / `.ods`)**: Offline `SheetJS` multi-worksheet viewer featuring sheet tabs, merged cells (`!merges`), sticky `A/B/C` column & row headers, tabular numeric right alignment, and instant row search filtering.
+  - **PowerPoint (`.pptx` / `.ppt`)**: Dual-mode hybrid slide deck viewer combining content-addressed SHA1 cached vector PDF conversion (via local PowerPoint COM or LibreOffice headless) with a built-in pure-JS `JSZip + DOMParser` OOXML slide renderer fallback.
+- **Three-State Session Status Indicators (Apple Spinner + Unread Highlight)**:
+  - Active sessions and collapsed parent project folders now display a calm, neutral **Apple-style 12-spoke activity spinner** while running, and light up with the theme's **`var(--accent)` highlight dot + bold title + `Unread` (`未读`) pill** only when a background session completes with unread updates (clearing immediately upon viewing).
+- **Reader Font Size Stepper & Decoupled Multilingual Typography**:
+  - Added a **`Font Size` (`正文字号`)** stepper (`−` / `12px–24px` / `+` / `↺ Reset`) scaling reader stage prose, headings, prompts, callouts, tables, and code blocks proportionally without shifting topbar/sidebar UI chrome.
+  - Upgraded `Font` into a collapsible vertical picker adding **`Times New Roman`**, and automatically splitting into independent **`英文字体` (`Sans` · `Serif` · `Times New Roman`) × `中文字体` (`无衬线 Sans` · `现代衬线 Serif` · `华文宋体` · `楷体` · `仿宋`)** selectors in `简体中文` mode with `@font-face { size-adjust }` optical baseline calibration.
+- **Multi-Candidate Named Custom RGB Palettes**:
+  - Upgraded `Custom RGB` into a persistent user palette library (`+ New Custom RGB` / `+ 新增自定义配色`, inline `✎` rename, `✕` delete, and `/api/custom-palettes` disk + SSE sync across windows) with automatic migration from legacy single-slot `amp-custom-rgb`.
+- **Live `update_steps` Checklist & `agy-preview --restart`**:
+  - Rendered live `update_steps` progress cards above each turn's `Execution process` fold without collapsing open cards mid-turn, added `agy-preview --restart` with automatic browser reload (`serverBootId`), and refreshed all `docs/screenshots/*.png` showcase images.
+
+### Fixed
+- **Live Sidebar Running Status Sync**: Opened SQLite `conversation_summaries.db` with WAL visibility (`readOnly` without `immutable`) and enriched `/api/conversations` + SSE updates with live hook and transcript telemetry so sidebar session and project indicators update in real time.
+
 ## [0.3.1] - 2026-11-25
 
 ### Added

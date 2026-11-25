@@ -1,7 +1,7 @@
 # HANDOFF — Antigravity Session Preview (`agy-session-preview`)
 
-> **Last Updated**: 2026-11-25
-> **Current Version**: `v0.3.1` (Synced with `origin/main`)
+> **Last Updated**: 2026-11-26
+> **Current Version**: `v0.4.0` (Synced with `origin/main`)
 > **Repository**: `E:\OpenSources2\agy_plugin\antigravity-markdown-preview`
 > **Remote**: `git@github.com:ChengzhuUwU/antigravity-session-preview.git` (`https://github.com/ChengzhuUwU/antigravity-session-preview`)
 
@@ -25,7 +25,8 @@ This document provides complete architectural context, user UX contracts, platfo
 
 | Date | Tag / Version | Commit | Highlights |
 |---|---|---|---|
-| 2026-11-25 | `v0.3.1` | `HEAD` | Adaptive horizontal-fill Mermaid sizing + `↔ Expand` / `↔ Fit Width`; sub-second SSE live streaming + `task-*.log` tail + progressive `--stdin`; `★ Pinned` sessions above projects; one-click project folder collapse/expand; verified Windows Explorer `📂 Folder` + in-app directory browser fallback; standardized `/preview` on `agy-preview` |
+| 2026-11-26 | `v0.4.0` | `HEAD` | Custom theme-native `PDF.js v4` + offline Office (`Word .docx/.doc`, `Excel .xlsx/.xls/.ods`, `PowerPoint .pptx/.ppt`) viewers; 3-state session status (Apple 12-spoke spinner + `Unread` completed highlight); `Font Size` (`12px–24px` + `↺`) + decoupled `Latin × CJK` collapsible font pickers (`Times New Roman`, `华文宋体`, `楷体`, `仿宋`); multi-candidate named Custom RGB palettes (`custom-palettes.json`); live `update_steps` checklist & `agy-preview --restart` |
+| 2026-11-25 | `v0.3.1` | `98d2e56` | Adaptive horizontal-fill Mermaid sizing + `↔ Expand` / `↔ Fit Width`; sub-second SSE live streaming + `task-*.log` tail + progressive `--stdin`; `★ Pinned` sessions above projects; one-click project folder collapse/expand; verified Windows Explorer `📂 Folder` + in-app directory browser fallback; standardized `/preview` on `agy-preview` |
 | 2026-11-25 | `v0.3.0` | `15f262f` | Renamed plugin to `agy-session-preview` (`Session Preview`); optional server password auth (`server/auth.mjs` + CLI `password set/cancel/disable/activate/print`), inline PDF/video/audio/CSV previews with HTTP `Range` (`206`) streaming, foreground Windows `📂 Folder` + cross-platform file picker fix, user-resizable larger `#mermaid-modal`, and live two-color Custom RGB palette panel |
 | 2026-11-24 | `v0.2.1` | `b3f9872` | Unified persistent `Preferences ▾` menu left of `↻ Sync`; full bilingual UI (`English` default / `简体中文`) across topbar, Mermaid, previews, and CLI tools |
 | 2026-11-24 | `v0.2.0` | `9b118de` | Offline `mermaid@12.3.0` + built-in **ELK** orthogonal layout, rounded 90° elbows, GPT-style multi-stage pastel pills, pan/zoom & fullscreen modal (`#mermaid-modal`) |

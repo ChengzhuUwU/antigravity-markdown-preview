@@ -36,6 +36,7 @@ Options:
       --new-window             Always open a new standalone app window
       --foreground             Keep server in foreground (used by daemon mode)
       --status                 Show running background preview server status
+      --restart                Restart the background preview server in place
       --stop                   Stop the background preview server
 
 Password Security (for remote / shared servers, disabled by default):
@@ -58,6 +59,7 @@ function parseArgs(argv) {
     open: true,
     newWindow: false,
     foreground: false,
+    restart: false,
     stop: false,
     status: false,
     stdin: false,
@@ -101,6 +103,7 @@ function parseArgs(argv) {
     else if (a === '--no-open') opts.open = false;
     else if (a === '--new-window') opts.newWindow = true;
     else if (a === '--foreground') opts.foreground = true;
+    else if (a === '--restart') opts.restart = true;
     else if (a === '--stop') opts.stop = true;
     else if (a === '--status') opts.status = true;
     else if (a === '--stdin') opts.stdin = true;
@@ -423,7 +426,7 @@ async function main() {
     return;
   }
 
-  if (opts.stop) {
+  if (opts.stop || opts.restart) {
     const running = await getRunningServer();
     if (running?.pid) {
       try { process.kill(running.pid); } catch {}
@@ -431,8 +434,11 @@ async function main() {
     for (const lockFile of [SERVER_JSON, LEGACY_SERVER_JSON]) {
       if (existsSync(lockFile)) rmSync(lockFile, { force: true });
     }
-    console.log(JSON.stringify({ stopped: true }));
-    return;
+    if (opts.stop) {
+      console.log(JSON.stringify({ stopped: true }));
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 150));
   }
 
   if (opts.status) {

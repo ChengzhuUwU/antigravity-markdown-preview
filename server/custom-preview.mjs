@@ -11,6 +11,9 @@ const SKIP_WALK_DIRS = new Set([
 
 export const MEDIA_EXT_KINDS = {
   '.pdf': 'pdf',
+  '.docx': 'docx', '.doc': 'doc',
+  '.xlsx': 'xlsx', '.xls': 'xlsx', '.ods': 'xlsx',
+  '.pptx': 'pptx', '.ppt': 'pptx',
   '.mp4': 'video', '.webm': 'video', '.mov': 'video', '.m4v': 'video', '.ogv': 'video', '.mkv': 'video', '.avi': 'video',
   '.mp3': 'audio', '.wav': 'audio', '.flac': 'audio', '.ogg': 'audio', '.oga': 'audio', '.m4a': 'audio', '.aac': 'audio', '.opus': 'audio', '.weba': 'audio',
   '.png': 'image', '.jpg': 'image', '.jpeg': 'image', '.gif': 'image', '.webp': 'image', '.svg': 'image', '.bmp': 'image', '.ico': 'image', '.avif': 'image',

@@ -16,6 +16,9 @@ const IMAGE_FILE_EXTS = new Set([
 
 const MEDIA_PREVIEW_EXTS = new Set([
   '.pdf',
+  '.docx', '.doc',
+  '.xlsx', '.xls', '.ods',
+  '.pptx', '.ppt',
   '.mp4', '.webm', '.mov', '.m4v', '.ogv', '.mkv', '.avi',
   '.mp3', '.wav', '.flac', '.ogg', '.oga', '.m4a', '.aac', '.opus', '.weba',
 ]);
@@ -32,7 +35,7 @@ const NON_PREVIEWABLE_BINARY_EXTS = new Set([
   '.exe', '.dll', '.so', '.dylib', '.bin', '.iso', '.dmg', '.msi',
   '.whl', '.pyc', '.pyo', '.pyd', '.class', '.jar', '.o', '.obj', '.a', '.lib',
   '.pt', '.pth', '.ckpt', '.safetensors', '.onnx', '.trt', '.engine', '.npz', '.npy', '.h5', '.hdf5', '.pkl', '.parquet',
-  '.doc', '.docx', '.ppt', '.pptx', '.xls', '.xlsx', '.blend', '.fbx', '.glb', '.gltf', '.usd', '.usda', '.usdc', '.stl', '.ply',
+  '.blend', '.fbx', '.glb', '.gltf', '.usd', '.usda', '.usdc', '.stl', '.ply',
 ]);
 
 const CALLOUT_ICONS = {
@@ -99,7 +102,7 @@ export function isPreviewableFilePath(rawHref) {
   const filename = slashIdx >= 0 ? clean.slice(slashIdx + 1) : clean;
   if (['dockerfile', 'makefile', 'cmakelists.txt', 'readme', 'license', 'changelog'].includes(filename)) return true;
   const dotIdx = filename.lastIndexOf('.');
-  // Extensionless local paths (e.g. `isaacgymenvs` or `docs/`) typically point to directories with README.md
+  // Extensionless local paths (e.g. `packages/core` or `docs/`) typically point to directories with README.md
   if (dotIdx === -1) return true;
   const ext = filename.slice(dotIdx);
   if (NON_PREVIEWABLE_BINARY_EXTS.has(ext)) return false;
@@ -126,7 +129,7 @@ export function classifyHref(rawHref) {
   if (lower.startsWith('data:image/')) {
     return { kind: 'data-image', href: trimmed };
   }
-  // Everything else (file://, E:\..., /path/..., isaacgymenvs/README.md, ./foo.py, ../img.png) is a local/relative target
+  // Everything else (file://, E:\..., /path/..., packages/core/README.md, ./foo.py, ../img.png) is a local/relative target
   return {
     kind: 'local',
     rawPath: trimmed,

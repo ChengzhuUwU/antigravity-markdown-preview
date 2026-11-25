@@ -46,4 +46,13 @@ for (const file of readdirSync(fontsSrc)) {
 // 4. Mermaid standalone browser UMD bundle (lazy-loaded in UI only when needed)
 copyFile(join(NM, 'mermaid', 'dist', 'mermaid.min.js'), join(VENDOR, 'mermaid.min.js'));
 
+// 5. PDF.js v4 ESM core + Web Worker (lazy-loaded only when viewing .pdf or converted .pptx)
+copyFile(join(NM, 'pdfjs-dist', 'build', 'pdf.min.mjs'), join(VENDOR, 'pdf.min.mjs'));
+copyFile(join(NM, 'pdfjs-dist', 'build', 'pdf.worker.min.mjs'), join(VENDOR, 'pdf.worker.min.mjs'));
+
+// 6. Office preview bundles (lazy-loaded on demand for .docx, .xlsx/.xls/.ods, .pptx)
+copyFile(join(NM, 'jszip', 'dist', 'jszip.min.js'), join(VENDOR, 'jszip.min.js'));
+copyFile(join(NM, 'docx-preview', 'dist', 'docx-preview.min.js'), join(VENDOR, 'docx-preview.min.js'));
+copyFile(join(NM, 'xlsx', 'dist', 'xlsx.full.min.js'), join(VENDOR, 'xlsx.full.min.js'));
+
 console.log(`[sync-vendor] Copied offline assets to ${VENDOR}`);

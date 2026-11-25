@@ -1,9 +1,9 @@
 {
   "name": "antigravity-session-preview",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
-  "description": "Lightweight real-time Session & Markdown previewer plugin for Antigravity CLI and Antigravity 2.0 with 2x8 color themes.",
+  "description": "Lightweight real-time Session, Markdown, PDF & Office previewer plugin for Antigravity CLI and Antigravity 2.0 with 2x8 + multi-candidate Custom RGB themes.",
   "repository": {
     "type": "git",
     "url": "https://github.com/ChengzhuUwU/antigravity-session-preview.git"
@@ -23,8 +23,12 @@
   },
   "devDependencies": {
     "@highlightjs/cdn-assets": "^11.11.1",
+    "docx-preview": "^0.3.7",
+    "jszip": "^3.10.2",
     "katex": "^0.16.22",
     "marked": "^15.0.12",
-    "mermaid": "^12.3.0"
+    "mermaid": "^12.3.0",
+    "pdfjs-dist": "^4.10.38",
+    "xlsx": "^0.18.5"
   }
 }

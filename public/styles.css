@@ -2799,6 +2799,150 @@ html[data-theme="dark"] .pinned-folder > .project-folder-header .project-folder-
   transform: scale(1.15);
 }
 
+/* Live Steps Checklist Card (update_steps) */
+.turn-steps-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.turn-steps-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.79rem;
+}
+
+.turn-steps-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+
+.turn-steps-glyph {
+  color: var(--accent);
+  font-size: 0.88rem;
+  line-height: 1;
+}
+
+.turn-steps-count {
+  font-family: var(--font-mono);
+  font-size: 0.73rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.turn-steps-active-hint {
+  font-size: 0.75rem;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.steps-progress-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  overflow: hidden;
+}
+
+.steps-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+
+.steps-progress-fill.all-done {
+  background: var(--success);
+}
+
+.turn-steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.step-check-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.step-check-icon {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  font-weight: 700;
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.step-check-row.status-done {
+  color: var(--text-main);
+}
+.step-check-row.status-done .step-check-icon {
+  color: var(--success);
+}
+
+.step-check-row.status-in_progress {
+  color: var(--text-main);
+  font-weight: 600;
+}
+.step-check-row.status-in_progress .step-check-icon {
+  color: var(--warning);
+  animation: pulse 1.5s infinite;
+}
+
+.step-check-row.status-pending .step-check-icon {
+  color: var(--text-faint);
+}
+
+.step-check-row.status-skipped {
+  color: var(--text-faint);
+  text-decoration: line-through;
+}
+
+.step-check-row.status-failed {
+  color: var(--error);
+}
+.step-check-row.status-failed .step-check-icon {
+  color: var(--error);
+}
+
+/* Progressive Markdown Streaming Cursor & Elapsed Timer */
+.assistant-markdown.is-streaming-md > :last-child::after {
+  content: "▍";
+  display: inline-block;
+  margin-left: 2px;
+  color: var(--accent);
+  font-weight: 700;
+  animation: cursorBlink 0.8s steps(2, start) infinite;
+}
+
+@keyframes cursorBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.15; }
+}
+
+.live-stream-elapsed {
+  font-family: var(--font-mono);
+  font-size: 0.71rem;
+  font-weight: 500;
+  color: var(--text-muted);
+}
+
 /* Live Streaming Footer & Directory Browser View */
 .live-stream-footer {
   margin-top: 6px;

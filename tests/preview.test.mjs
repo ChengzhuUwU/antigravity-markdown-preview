@@ -675,3 +675,70 @@ test('Pinned sessions API persists star order and folder-entries API lists direc
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('buildNormalizedView extracts live update_steps checklist and marks in-flight queued tools as running', () => {
+  const steps = [
+    { step_index: 0, source: 'USER_EXPLICIT', type: 'USER_INPUT', status: 'DONE', content: 'Ship release' },
+    {
+      step_index: 1,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      content: 'Updating docs first.',
+      tool_calls: [
+        {
+          name: 'update_steps',
+          args: {
+            steps: [
+              { title: 'Update version & changelog', status: 'in_progress' },
+              { title: 'Pack & push tag', status: 'pending' },
+            ],
+          },
+        },
+        { name: 'edit_file', args: { Path: 'CHANGELOG.md', Target: 'a', Replacement: 'b' } },
+      ],
+    },
+    // Only update_steps result has arrived so far; edit_file is still executing!
+    { step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', content: 'OK' },
+  ];
+
+  const viewMidStep = buildNormalizedView(steps);
+  assert.equal(viewMidStep.summary.activeStatus, 'running');
+  const turn = viewMidStep.turns[0];
+  assert.ok(turn.planSteps);
+  assert.equal(turn.planSteps.doneCount, 0);
+  assert.equal(turn.planSteps.totalCount, 2);
+  assert.equal(turn.planSteps.activeTitle, 'Update version & changelog');
+  const tg = turn.items.find((it) => it.kind === 'tool_group');
+  assert.equal(tg.tools[0].status, 'done');
+  assert.equal(tg.tools[1].status, 'running');
+
+  // Now finish edit_file and emit second update_steps marking step 1 done & step 2 in_progress
+  steps.push(
+    { step_index: 3, source: 'MODEL', type: 'GENERIC', status: 'DONE', content: 'Edited' },
+    {
+      step_index: 4,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      content: '',
+      tool_calls: [
+        {
+          name: 'update_steps',
+          args: {
+            steps: [
+              { title: 'Update version & changelog', status: 'done' },
+              { title: 'Pack & push tag', status: 'in_progress' },
+            ],
+          },
+        },
+      ],
+    },
+    { step_index: 5, source: 'MODEL', type: 'GENERIC', status: 'DONE', content: 'OK' }
+  );
+
+  const viewNext = buildNormalizedView(steps);
+  assert.equal(viewNext.turns[0].planSteps.doneCount, 1);
+  assert.equal(viewNext.turns[0].planSteps.activeTitle, 'Pack & push tag');
+});
+

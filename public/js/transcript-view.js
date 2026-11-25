@@ -266,14 +266,104 @@ function summarizeProcessItems(processItems, stats, isTurnRunning) {
   return `${prefix} · ${parts.join(' · ')}`;
 }
 
-function renderLiveStreamFooterHtml(isTurnRunning, hookState, liveTaskLog) {
+function balanceStreamingCodeFence(mdSlice) {
+  const fences = mdSlice.match(/^(?:```+|~~~+)/gm);
+  if (fences && fences.length % 2 === 1) {
+    const lastFence = fences[fences.length - 1];
+    const ch = lastFence[0];
+    return `${mdSlice}\n${ch.repeat(lastFence.length)}`;
+  }
+  return mdSlice;
+}
+
+function streamMarkdownIntoNode(mdEl, fullText, { baseDir, theme /* , instant = false, onStreamTick = null */ } = {}) {
+  const safeText = String(fullText ?? '');
+  mdEl._streamTarget = safeText;
+  mdEl.dataset.rawLen = String(safeText.length);
+
+  // Instant clean render (progressive client-side typewriter streaming commented out per user preference)
+  if (mdEl._streamTimer) {
+    clearTimeout(mdEl._streamTimer);
+    mdEl._streamTimer = null;
+  }
+  mdEl._streamRevealed = safeText.length;
+  mdEl.classList.remove('is-streaming-md');
+  mdEl.innerHTML = renderMarkdownHtml(safeText, { baseDir });
+  enhanceMarkdownDom(mdEl, theme);
+
+  /*
+  if (instant || safeText.length === 0) {
+    ...
+  }
+  // Progressive frame-by-frame typewriter reveal (disabled for now):
+  // const frameMs = 30;
+  // const totalUnrevealed = Math.max(1, safeText.length - (mdEl._streamRevealed || 0));
+  // const targetDurationMs = Math.min(3600, Math.max(650, totalUnrevealed * 1.75));
+  // const charsPerFrame = Math.max(6, Math.ceil(totalUnrevealed / Math.max(1, targetDurationMs / frameMs)));
+  */
+}
+
+function processItemSignature(pItem) {
+  if (!pItem) return '';
+  if (pItem.kind === 'thinking') {
+    return `think:${pItem.id}:${pItem.status || ''}:${(pItem.text || '').length}`;
+  }
+  if (pItem.kind === 'tool_group') {
+    return `tg:${pItem.id}:${(pItem.tools || []).map((tl) => `${tl.id}:${tl.status}:${tl.durationMs || 0}:${tl.outputPreview?.totalLength || 0}`).join('|')}`;
+  }
+  return `${pItem.kind}:${pItem.id || ''}:${(pItem.text || '').length}`;
+}
+
+function renderPlanStepsCardHtml(planSteps) {
+  if (!planSteps?.steps?.length) return '';
+  const { steps, doneCount = 0, totalCount = steps.length, activeTitle = '' } = planSteps;
+  const pct = Math.min(100, Math.round((doneCount / Math.max(1, totalCount)) * 100));
+  const allDone = doneCount >= totalCount;
+
+  const statusPill = allDone
+    ? `<span class="tool-status-pill done">✓ ${escapeHtml(t('stepsAllDone'))}</span>`
+    : `<span class="tool-status-pill running">${pct}%</span>`;
+
+  const rowsHtml = steps.map((st) => {
+    const status = st.status || 'pending';
+    const icon = status === 'done' ? '✓'
+      : status === 'in_progress' ? '●'
+      : status === 'failed' ? '✕'
+      : status === 'skipped' ? '–'
+      : '○';
+    return `<div class="step-check-row status-${escapeHtml(status)}">
+      <span class="step-check-icon">${icon}</span>
+      <span class="step-check-title">${escapeHtml(st.title)}</span>
+    </div>`;
+  }).join('');
+
+  return `
+    <div class="turn-steps-header">
+      <div class="turn-steps-header-left">
+        <span class="turn-steps-glyph">⠿</span>
+        <strong>${escapeHtml(t('stepsCardTitle'))}</strong>
+        <span class="turn-steps-count">${escapeHtml(t('stepsProgressBadge', { done: doneCount, total: totalCount }))}</span>
+        ${!allDone && activeTitle ? `<span class="turn-steps-active-hint">· ${escapeHtml(activeTitle)}</span>` : ''}
+      </div>
+      ${statusPill}
+    </div>
+    <div class="steps-progress-track">
+      <div class="steps-progress-fill${allDone ? ' all-done' : ''}" style="width:${pct}%"></div>
+    </div>
+    <div class="turn-steps-list">${rowsHtml}</div>
+  `;
+}
+
+function renderLiveStreamFooterHtml(isTurnRunning, hookState, liveTaskLog, turnRunningSinceMs = 0) {
   if (!isTurnRunning) return '';
   let statusText = t('streamingBadge');
-  if (hookState?.phase === 'thinking') {
+  if (hookState?.phase === 'thinking' || hookState?.phase === 'between_steps') {
     statusText = t('thinkingPhase');
   } else if (hookState?.phase === 'running_tool') {
     statusText = t('runningToolPhase', { tool: hookState.toolName || 'tool' });
   }
+  const elapsedSec = turnRunningSinceMs > 0 ? Math.max(0, Math.floor((Date.now() - turnRunningSinceMs) / 1000)) : 0;
+  const elapsedStr = elapsedSec > 0 ? `${elapsedSec}s` : '';
   const logHtml = liveTaskLog?.text
     ? `<div class="live-task-stream-box">
         <div class="tool-section-label">${escapeHtml(t('liveTaskOutputLabel'))} · ${escapeHtml(liveTaskLog.filename || '')}</div>
@@ -284,12 +374,13 @@ function renderLiveStreamFooterHtml(isTurnRunning, hookState, liveTaskLog) {
     <div class="live-stream-indicator">
       <span class="status-dot running"></span>
       <span>${escapeHtml(statusText)}</span>
+      <span class="live-stream-elapsed" data-stream-since="${turnRunningSinceMs || Date.now()}">${escapeHtml(elapsedStr)}</span>
     </div>
     ${logHtml}
   </div>`;
 }
 
-function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning, hookState = null, liveTaskLog = null }) {
+function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning, hookState = null, liveTaskLog = null, isLiveUpdate = false, onStreamTick = null, turnRunningSinceMs = 0 }) {
   const el = document.createElement('section');
   el.className = 'turn-block';
   el.id = turn.id;
@@ -369,6 +460,15 @@ function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning, 
     }
   }
 
+  // 2.5 Live Plan Steps Checklist Card (rendered prominently above Execution process!)
+  if (turn.planSteps?.steps?.length > 0) {
+    const stepsCard = document.createElement('div');
+    stepsCard.className = 'turn-steps-card';
+    stepsCard.dataset.stepsSig = JSON.stringify(turn.planSteps.steps);
+    stepsCard.innerHTML = renderPlanStepsCardHtml(turn.planSteps);
+    el.appendChild(stepsCard);
+  }
+
   // 3. High-Level Collapsible Execution Process Container (collapsed by default!)
   if (processItems.length > 0) {
     const procKey = `${turn.id}:process`;
@@ -397,11 +497,7 @@ function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning, 
 
     const bodyEl = procCard.querySelector('.process-fold-body');
     const populateProcessChildren = () => {
-      bodyEl.innerHTML = '';
-      for (const pItem of processItems) {
-        const child = buildProcessItemNode(pItem, { theme, baseDir, expandedState });
-        if (child) bodyEl.appendChild(child);
-      }
+      patchProcessBodyInPlace(bodyEl, processItems, { theme, baseDir, expandedState, isLiveUpdate: false, onStreamTick });
       bodyEl.dataset.hydrated = 'true';
     };
 
@@ -413,20 +509,20 @@ function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning, 
   }
 
   // 4. Final Assistant Markdown Responses (always clean and prominently visible)
-  for (const item of finalItems) {
+  for (let i = 0; i < finalItems.length; i++) {
+    const item = finalItems[i];
     const mdEl = document.createElement('div');
     mdEl.className = 'assistant-markdown';
     mdEl.dataset.stepIndex = String(item.stepIndex);
-    mdEl.dataset.rawLen = String((item.text || '').length);
-    mdEl.innerHTML = renderMarkdownHtml(item.text, { baseDir });
-    enhanceMarkdownDom(mdEl, theme);
+    const animateThis = Boolean(isLiveUpdate && i === finalItems.length - 1);
+    streamMarkdownIntoNode(mdEl, item.text, { baseDir, theme, instant: !animateThis, onStreamTick });
     el.appendChild(mdEl);
   }
 
   if (isTurnRunning) {
     const streamWrap = document.createElement('div');
     streamWrap.className = 'live-stream-slot';
-    streamWrap.innerHTML = renderLiveStreamFooterHtml(true, hookState, liveTaskLog);
+    streamWrap.innerHTML = renderLiveStreamFooterHtml(true, hookState, liveTaskLog, turnRunningSinceMs);
     const pre = streamWrap.querySelector('.live-task-stream-pre');
     if (pre) pre.scrollTop = pre.scrollHeight;
     el.appendChild(streamWrap);
@@ -435,7 +531,65 @@ function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning, 
   return el;
 }
 
-function patchTurnElementInPlace(existingEl, turn, { theme, baseDir, expandedState, isTurnRunning, hookState, liveTaskLog, sig }) {
+function patchProcessBodyInPlace(bodyEl, processItems, { theme, baseDir, expandedState, isLiveUpdate = false, onStreamTick = null }) {
+  if (!bodyEl) return;
+  const existingById = new Map();
+  Array.from(bodyEl.children).forEach((child) => {
+    if (child.dataset.procItemId) {
+      existingById.set(child.dataset.procItemId, child);
+    }
+  });
+
+  const keepIds = new Set(processItems.map((it) => it.id));
+  for (const [id, node] of existingById.entries()) {
+    if (!keepIds.has(id)) node.remove();
+  }
+
+  let prevCursor = null;
+  for (let idx = 0; idx < processItems.length; idx++) {
+    const pItem = processItems[idx];
+    const sig = processItemSignature(pItem);
+    const existing = existingById.get(pItem.id);
+
+    if (existing && existing.dataset.procItemSig === sig) {
+      prevCursor = existing;
+      continue;
+    }
+
+    if (existing && pItem.kind === 'markdown') {
+      existing.dataset.procItemSig = sig;
+      streamMarkdownIntoNode(existing, pItem.text, {
+        baseDir,
+        theme,
+        instant: !isLiveUpdate,
+        onStreamTick,
+      });
+      prevCursor = existing;
+      continue;
+    }
+
+    const fresh = buildProcessItemNode(pItem, { theme, baseDir, expandedState });
+    if (!fresh) continue;
+    fresh.dataset.procItemId = pItem.id;
+    fresh.dataset.procItemSig = sig;
+
+    if (pItem.kind === 'markdown' && isLiveUpdate && idx === processItems.length - 1 && !existing) {
+      fresh.innerHTML = '';
+      streamMarkdownIntoNode(fresh, pItem.text, { baseDir, theme, instant: false, onStreamTick });
+    }
+
+    if (existing) {
+      existing.replaceWith(fresh);
+    } else if (prevCursor && prevCursor.parentElement === bodyEl) {
+      prevCursor.after(fresh);
+    } else {
+      bodyEl.appendChild(fresh);
+    }
+    prevCursor = fresh;
+  }
+}
+
+function patchTurnElementInPlace(existingEl, turn, { theme, baseDir, expandedState, isTurnRunning, hookState, liveTaskLog, sig, isLiveUpdate = false, onStreamTick = null, turnRunningSinceMs = 0 }) {
   existingEl.dataset.signature = sig;
 
   const processItems = [];
@@ -445,7 +599,31 @@ function patchTurnElementInPlace(existingEl, turn, { theme, baseDir, expandedSta
     else processItems.push(item);
   }
 
-  // 1. Update or insert collapsible Execution Process card without tearing down User Card
+  const userAnchor = existingEl.querySelector(':scope > .user-meta-outside') || existingEl.querySelector(':scope > .user-card');
+
+  // 0. Update or insert Live Plan Steps Checklist card in place
+  let stepsCard = existingEl.querySelector(':scope > .turn-steps-card');
+  if (turn.planSteps?.steps?.length > 0) {
+    const nextStepsSig = JSON.stringify(turn.planSteps.steps);
+    if (!stepsCard) {
+      stepsCard = document.createElement('div');
+      stepsCard.className = 'turn-steps-card';
+      stepsCard.dataset.stepsSig = nextStepsSig;
+      stepsCard.innerHTML = renderPlanStepsCardHtml(turn.planSteps);
+      if (userAnchor) userAnchor.after(stepsCard);
+      else existingEl.prepend(stepsCard);
+    } else if (stepsCard.dataset.stepsSig !== nextStepsSig) {
+      stepsCard.dataset.stepsSig = nextStepsSig;
+      stepsCard.innerHTML = renderPlanStepsCardHtml(turn.planSteps);
+    }
+  } else if (stepsCard) {
+    stepsCard.remove();
+    stepsCard = null;
+  }
+
+  const anchorBeforeProcess = stepsCard || userAnchor;
+
+  // 1. Update or insert collapsible Execution Process card WITHOUT collapsing or clearing unchanged children!
   let procCard = existingEl.querySelector(':scope > .process-fold-card');
   if (processItems.length > 0) {
     const procKey = `${turn.id}:process`;
@@ -455,15 +633,6 @@ function patchTurnElementInPlace(existingEl, turn, { theme, baseDir, expandedSta
     const badges = [];
     if (isTurnRunning) badges.push(`<span class="tool-status-pill running">running</span>`);
     if (errCount > 0) badges.push(`<span class="tool-status-pill error">${errCount} ${errCount === 1 ? 'error' : 'errors'}</span>`);
-
-    const populateChildren = (bodyNode) => {
-      bodyNode.innerHTML = '';
-      for (const pItem of processItems) {
-        const child = buildProcessItemNode(pItem, { theme, baseDir, expandedState });
-        if (child) bodyNode.appendChild(child);
-      }
-      bodyNode.dataset.hydrated = 'true';
-    };
 
     if (!procCard) {
       procCard = document.createElement('div');
@@ -480,22 +649,26 @@ function patchTurnElementInPlace(existingEl, turn, { theme, baseDir, expandedSta
         </button>
         <div class="process-fold-body"></div>
       `;
-      const anchor = existingEl.querySelector(':scope > .user-meta-outside') || existingEl.querySelector(':scope > .user-card');
-      if (anchor) anchor.after(procCard);
+      if (anchorBeforeProcess) anchorBeforeProcess.after(procCard);
       else existingEl.prepend(procCard);
     } else {
       procCard.classList.toggle('running', Boolean(isTurnRunning));
       procCard.dataset.open = String(procOpen);
       const titleEl = procCard.querySelector(':scope > .process-fold-trigger .process-fold-title');
-      if (titleEl) titleEl.textContent = procLabel;
+      if (titleEl && titleEl.textContent !== procLabel) titleEl.textContent = procLabel;
       const badgeWrap = procCard.querySelector(':scope > .process-fold-trigger .tool-group-badges');
-      if (badgeWrap) badgeWrap.innerHTML = badges.join('');
+      const nextBadgesHtml = badges.join('');
+      if (badgeWrap && badgeWrap.innerHTML !== nextBadgesHtml) badgeWrap.innerHTML = nextBadgesHtml;
     }
 
     const bodyEl = procCard.querySelector(':scope > .process-fold-body');
-    procCard._hydrateProcess = () => populateChildren(bodyEl);
+    procCard._hydrateProcess = () => {
+      patchProcessBodyInPlace(bodyEl, processItems, { theme, baseDir, expandedState, isLiveUpdate: false, onStreamTick });
+      bodyEl.dataset.hydrated = 'true';
+    };
     if (procOpen && bodyEl) {
-      populateChildren(bodyEl);
+      patchProcessBodyInPlace(bodyEl, processItems, { theme, baseDir, expandedState, isLiveUpdate, onStreamTick });
+      bodyEl.dataset.hydrated = 'true';
     } else if (bodyEl) {
       delete bodyEl.dataset.hydrated;
     }
@@ -503,7 +676,7 @@ function patchTurnElementInPlace(existingEl, turn, { theme, baseDir, expandedSta
     procCard.remove();
   }
 
-  // 2. Incrementally update final Assistant Markdown blocks in place (flicker-free streaming)
+  // 2. Incrementally update & progressively stream final Assistant Markdown blocks in place
   const existingMdByStep = new Map();
   existingEl.querySelectorAll(':scope > .assistant-markdown[data-step-index]').forEach((node) => {
     existingMdByStep.set(node.dataset.stepIndex, node);
@@ -515,23 +688,21 @@ function patchTurnElementInPlace(existingEl, turn, { theme, baseDir, expandedSta
   }
 
   const streamSlotBefore = existingEl.querySelector(':scope > .live-stream-slot');
-  for (const item of finalItems) {
+  for (let i = 0; i < finalItems.length; i++) {
+    const item = finalItems[i];
     const stepKey = String(item.stepIndex);
     const nextLen = String((item.text || '').length);
     let mdEl = existingMdByStep.get(stepKey);
+    const shouldAnimate = Boolean(isLiveUpdate && i === finalItems.length - 1);
     if (!mdEl) {
       mdEl = document.createElement('div');
-      mdEl.className = 'assistant-markdown streaming-reveal';
+      mdEl.className = 'assistant-markdown';
       mdEl.dataset.stepIndex = stepKey;
-      mdEl.dataset.rawLen = nextLen;
-      mdEl.innerHTML = renderMarkdownHtml(item.text, { baseDir });
-      enhanceMarkdownDom(mdEl, theme);
       if (streamSlotBefore) existingEl.insertBefore(mdEl, streamSlotBefore);
       else existingEl.appendChild(mdEl);
+      streamMarkdownIntoNode(mdEl, item.text, { baseDir, theme, instant: !shouldAnimate, onStreamTick });
     } else if (mdEl.dataset.rawLen !== nextLen) {
-      mdEl.dataset.rawLen = nextLen;
-      mdEl.innerHTML = renderMarkdownHtml(item.text, { baseDir });
-      enhanceMarkdownDom(mdEl, theme);
+      streamMarkdownIntoNode(mdEl, item.text, { baseDir, theme, instant: !shouldAnimate, onStreamTick });
     }
   }
 
@@ -543,7 +714,7 @@ function patchTurnElementInPlace(existingEl, turn, { theme, baseDir, expandedSta
       streamSlot.className = 'live-stream-slot';
       existingEl.appendChild(streamSlot);
     }
-    streamSlot.innerHTML = renderLiveStreamFooterHtml(true, hookState, liveTaskLog);
+    streamSlot.innerHTML = renderLiveStreamFooterHtml(true, hookState, liveTaskLog, turnRunningSinceMs);
     const pre = streamSlot.querySelector('.live-task-stream-pre');
     if (pre) pre.scrollTop = pre.scrollHeight;
   } else if (streamSlot) {
@@ -554,7 +725,8 @@ function patchTurnElementInPlace(existingEl, turn, { theme, baseDir, expandedSta
 function turnSignature(turn) {
   const lastItem = turn.items[turn.items.length - 1];
   const lastTextLen = lastItem?.text?.length || lastItem?.tools?.length || 0;
-  return `${turn.items.length}:${turn.stats.thinkingCount}:${turn.stats.toolCount}:${turn.stats.errorCount}:${lastTextLen}:${lastItem?.status || ''}:${JSON.stringify(lastItem?.tools?.map((t) => `${t.status}:${t.durationMs}`) || [])}`;
+  const stepsSig = turn.planSteps?.steps ? JSON.stringify(turn.planSteps.steps) : '';
+  return `${turn.items.length}:${turn.stats.thinkingCount}:${turn.stats.toolCount}:${turn.stats.errorCount}:${lastTextLen}:${lastItem?.status || ''}:${stepsSig}:${JSON.stringify(lastItem?.tools?.map((t) => `${t.status}:${t.durationMs}`) || [])}`;
 }
 
 export function renderCliInsightsHtml(tab, view, cliInsights, artifacts, baseDir) {
@@ -731,7 +903,7 @@ export function renderCliInsightsHtml(tab, view, cliInsights, artifacts, baseDir
 }
 
 export class TranscriptRenderer {
-  constructor(container, { theme = 'light', onLoadFullStep, onTocChanged, onSaveBtwNote, onDeleteBtwNote } = {}) {
+  constructor(container, { theme = 'light', onLoadFullStep, onTocChanged, onSaveBtwNote, onDeleteBtwNote, onStreamTick } = {}) {
     this.container = container;
     this.theme = theme;
     this.baseDir = '';
@@ -739,15 +911,29 @@ export class TranscriptRenderer {
     this.onTocChanged = onTocChanged;
     this.onSaveBtwNote = onSaveBtwNote;
     this.onDeleteBtwNote = onDeleteBtwNote;
+    this.onStreamTick = onStreamTick || null;
     this.expandedState = new Set();
-    this.wasRunningTurns = new Set();
-    this.userClosedWhileRunning = new Set();
+    this.turnRunningSince = new Map();
     this.activeCliTab = null; // null | 'btw' | 'context' | 'usage'
     this.windowLimit = 35;
     this.currentConversationId = null;
     this.lastView = null;
     this.lastIsRunning = false;
     this._bindEvents();
+    this._startElapsedTicker();
+  }
+
+  _startElapsedTicker() {
+    this._elapsedTimer = setInterval(() => {
+      if (!this.container?.isConnected) return;
+      this.container.querySelectorAll('[data-stream-since]').forEach((node) => {
+        const since = Number(node.dataset.streamSince) || 0;
+        if (since > 0) {
+          const sec = Math.max(0, Math.floor((Date.now() - since) / 1000));
+          node.textContent = sec > 0 ? `${sec}s` : '';
+        }
+      });
+    }, 1000);
   }
 
   setTheme(theme) {
@@ -831,16 +1017,12 @@ export class TranscriptRenderer {
         card.dataset.open = String(nextOpen);
         if (nextOpen) {
           this.expandedState.add(key);
-          this.userClosedWhileRunning.delete(key);
           const body = card.querySelector(':scope > .process-fold-body');
           if (body && !body.dataset.hydrated && card._hydrateProcess) {
             card._hydrateProcess();
           }
         } else {
           this.expandedState.delete(key);
-          if (card.classList.contains('running')) {
-            this.userClosedWhileRunning.add(key);
-          }
         }
         return;
       }
@@ -947,9 +1129,6 @@ export class TranscriptRenderer {
     this.expandedState.clear();
     this.container.querySelectorAll('.process-fold-card, .disclosure-card, .tool-group-card, .tool-row').forEach((node) => {
       node.dataset.open = 'false';
-      if (node.classList.contains('running') && node.dataset.disclosureKey) {
-        this.userClosedWhileRunning.add(node.dataset.disclosureKey);
-      }
     });
   }
 
@@ -975,7 +1154,7 @@ export class TranscriptRenderer {
     }
   }
 
-  render(convId, view, { isRunning = false, hookState = null, liveTaskLog = null, baseDir, subagents = [], parentSession = null, cliInsights = null, artifacts = [] } = {}) {
+  render(convId, view, { isRunning = false, isLiveUpdate = false, hookState = null, liveTaskLog = null, baseDir, subagents = [], parentSession = null, cliInsights = null, artifacts = [] } = {}) {
     if (baseDir !== undefined) this.baseDir = baseDir || '';
     this.lastSubagents = subagents;
     this.lastParentSession = parentSession;
@@ -986,8 +1165,7 @@ export class TranscriptRenderer {
     if (convId !== this.currentConversationId) {
       this.currentConversationId = convId;
       this.expandedState.clear();
-      this.wasRunningTurns.clear();
-      this.userClosedWhileRunning.clear();
+      this.turnRunningSince.clear();
       this.activeCliTab = null;
       this.windowLimit = 35;
       this.container.innerHTML = '';
@@ -1006,17 +1184,16 @@ export class TranscriptRenderer {
     const visibleTurns = turns.slice(startIdx);
     const lastTurn = turns[turns.length - 1];
 
-    // Keep execution process collapsed by default; if user manually expanded an active turn, auto-collapse once finished!
+    // Track elapsed start time for the actively running turn (NEVER forcibly collapse user-expanded process cards!)
     for (const turn of visibleTurns) {
-      const procKey = `${turn.id}:process`;
       const hasFinalMarkdown = turn.items.some((it) => it.kind === 'markdown' && !it.intermediate);
       const turnRunning = turn.id === lastTurn?.id && (isRunning || view?.summary?.activeStatus === 'running') && !hasFinalMarkdown;
-
       if (turnRunning) {
-        this.wasRunningTurns.add(turn.id);
-      } else if (this.wasRunningTurns.has(turn.id)) {
-        this.wasRunningTurns.delete(turn.id);
-        this.expandedState.delete(procKey);
+        if (!this.turnRunningSince.has(turn.id)) {
+          this.turnRunningSince.set(turn.id, hookState?.updatedAt || Date.now());
+        }
+      } else {
+        this.turnRunningSince.delete(turn.id);
       }
     }
 
@@ -1120,6 +1297,8 @@ export class TranscriptRenderer {
       if (existing && existing.dataset.signature === sig) {
         continue;
       }
+      const turnRunningSinceMs = this.turnRunningSince.get(turn.id) || 0;
+      const animateTurn = Boolean(isLiveUpdate && turn.id === lastTurn?.id);
       if (existing) {
         patchTurnElementInPlace(existing, turn, {
           theme: this.theme,
@@ -1129,6 +1308,9 @@ export class TranscriptRenderer {
           hookState,
           liveTaskLog,
           sig,
+          isLiveUpdate: animateTurn,
+          onStreamTick: this.onStreamTick,
+          turnRunningSinceMs,
         });
       } else {
         const freshNode = buildTurnElement(turn, {
@@ -1138,6 +1320,9 @@ export class TranscriptRenderer {
           isTurnRunning,
           hookState,
           liveTaskLog,
+          isLiveUpdate: animateTurn,
+          onStreamTick: this.onStreamTick,
+          turnRunningSinceMs,
         });
         this.container.appendChild(freshNode);
       }

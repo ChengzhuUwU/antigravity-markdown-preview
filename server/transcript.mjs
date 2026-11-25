@@ -399,8 +399,31 @@ function summarizeToolCall(name, args) {
     const qs = Array.isArray(args.questions) ? args.questions.length : 1;
     return `${qs} question(s)`;
   }
+  if (lower === 'update_steps') {
+    const steps = extractPlanStepsList(args);
+    if (steps.length > 0) {
+      const done = steps.filter((s) => s.status === 'done').length;
+      const active = steps.find((s) => s.status === 'in_progress');
+      return `${done}/${steps.length} steps${active ? ` · ${active.title}` : ''}`.slice(0, 84);
+    }
+  }
   const firstVal = Object.values(args).find((v) => typeof v === 'string' && v.trim());
   return firstVal ? String(firstVal).slice(0, 64) : '';
+}
+
+function extractPlanStepsList(args) {
+  if (!args || typeof args !== 'object') return [];
+  let raw = args.steps;
+  if (typeof raw === 'string') {
+    try { raw = JSON.parse(raw); } catch { return []; }
+  }
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((s) => s && typeof s === 'object' && typeof s.title === 'string' && s.title.trim())
+    .map((s) => ({
+      title: s.title.trim(),
+      status: typeof s.status === 'string' ? s.status.trim().toLowerCase() : 'pending',
+    }));
 }
 
 function parseToolContentMetadata(rawContent) {
@@ -745,6 +768,20 @@ export function buildNormalizedView(rawSteps) {
           turn.stats.toolCount += 1;
           const name = tc?.name || tc?.function?.name || 'tool';
           const args = normalizeToolArgs(tc?.args || tc?.arguments || {});
+          if (name.toLowerCase() === 'update_steps') {
+            const stepsList = extractPlanStepsList(args);
+            if (stepsList.length > 0) {
+              const doneCount = stepsList.filter((s) => s.status === 'done').length;
+              const activeStep = stepsList.find((s) => s.status === 'in_progress');
+              turn.planSteps = {
+                steps: stepsList,
+                doneCount,
+                totalCount: stepsList.length,
+                activeTitle: activeStep ? activeStep.title : '',
+                updatedAtStep: stepIndex,
+              };
+            }
+          }
           const entry = {
             id: `tool-${stepIndex}-${tcIdx}`,
             stepIndex,
@@ -879,7 +916,15 @@ export function buildNormalizedView(rawSteps) {
     }
   }
 
-  if (rawSteps.length > 0 && rawSteps[rawSteps.length - 1]?.status !== 'RUNNING') {
+  if (pendingToolsQueue.length > 0) {
+    // Remaining tool calls on the latest turn have not emitted GENERIC result steps yet -> actively running!
+    activeStatus = 'running';
+    for (const pendingTool of pendingToolsQueue) {
+      if (pendingTool.status === 'pending') {
+        pendingTool.status = 'running';
+      }
+    }
+  } else if (rawSteps.length > 0 && rawSteps[rawSteps.length - 1]?.status !== 'RUNNING') {
     activeStatus = 'idle';
   }
 

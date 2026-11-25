@@ -156,6 +156,15 @@ function initialThemeMode() {
   return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
+function loadCachedPinnedIds() {
+  try {
+    const arr = JSON.parse(localStorage.getItem('amp-pinned-sessions') || '[]');
+    return Array.isArray(arr) ? arr.filter((x) => typeof x === 'string' && x) : [];
+  } catch {
+    return [];
+  }
+}
+
 const state = {
   mode: 'sessions', // 'sessions' | 'docs'
   flavor: localStorage.getItem('amp-flavor') || 'antigravity-cli',
@@ -171,6 +180,10 @@ const state = {
   currentBaseDir: '',
   docsStoragePath: '',
   conversations: [],
+  pinnedIds: loadCachedPinnedIds(),
+  pinnedGroupOpen: true,
+  allProjectKeys: [],
+  anyProjectOpen: true,
   customPreviews: [],
   projectExpanded: new Map(),
   showOlderInProject: new Set(),
@@ -483,6 +496,7 @@ function applyLanguage(nextLang) {
     maxBtn.textContent = isMax ? t('mmdRestoreBtn') : t('mmdMaximizeBtn');
   }
   applyAppearance();
+  updatePinSessionButton();
   if (state.eventSource) {
     applyHookPhase(state.currentViewData?.hookState);
   }
@@ -500,10 +514,18 @@ function applyLanguage(nextLang) {
     }
   }
   if (state.sideCurrent && !el('side-preview-pane')?.classList.contains('hidden')) {
-    populatePreviewBody(el('side-preview-body'), state.sideCurrent, 'side-code-view');
+    if (state.sideCurrent.kind === 'directory') {
+      browseFolderInPreview(state.sideCurrent.path, '', 'sidebar');
+    } else {
+      populatePreviewBody(el('side-preview-body'), state.sideCurrent, 'side-code-view');
+    }
   }
   if (state.popupCurrent && !el('file-preview-modal')?.classList.contains('hidden')) {
-    populatePreviewBody(el('popup-preview-body'), state.popupCurrent, 'popup-code-view');
+    if (state.popupCurrent.kind === 'directory') {
+      browseFolderInPreview(state.popupCurrent.path, '', 'popup');
+    } else {
+      populatePreviewBody(el('popup-preview-body'), state.popupCurrent, 'popup-code-view');
+    }
   }
 }
 
@@ -606,12 +628,58 @@ async function loadFlavors() {
   } catch {}
 }
 
+function updatePinSessionButton() {
+  const btn = el('pin-session-btn');
+  if (!btn) return;
+  const visible = state.mode === 'sessions' && Boolean(state.activeConvId);
+  btn.classList.toggle('hidden', !visible);
+  if (!visible) return;
+  const isPinned = state.pinnedIds.includes(state.activeConvId);
+  btn.classList.toggle('pinned', isPinned);
+  btn.textContent = isPinned ? '★' : '☆';
+  btn.title = isPinned ? t('unpinSessionTip') : t('pinSessionTip');
+}
+
+async function togglePinSession(convId) {
+  if (!convId) return;
+  const wasPinned = state.pinnedIds.includes(convId);
+  const nextPinned = !wasPinned;
+  state.pinnedIds = nextPinned
+    ? [convId, ...state.pinnedIds.filter((id) => id !== convId)]
+    : state.pinnedIds.filter((id) => id !== convId);
+  try { localStorage.setItem('amp-pinned-sessions', JSON.stringify(state.pinnedIds)); } catch {}
+  updatePinSessionButton();
+  renderSidebarList();
+
+  try {
+    const res = await apiFetch('/api/pinned-sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId: convId, pinned: nextPinned }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data.pinnedIds)) {
+        state.pinnedIds = data.pinnedIds;
+        try { localStorage.setItem('amp-pinned-sessions', JSON.stringify(state.pinnedIds)); } catch {}
+        updatePinSessionButton();
+        renderSidebarList();
+      }
+    }
+  } catch {}
+}
+
 async function loadConversations() {
   try {
     const res = await apiFetch(`/api/conversations?flavor=${encodeURIComponent(state.flavor)}`);
     if (!res.ok) return;
     const data = await res.json();
     state.conversations = data.conversations || [];
+    if (Array.isArray(data.pinnedIds)) {
+      state.pinnedIds = data.pinnedIds;
+      try { localStorage.setItem('amp-pinned-sessions', JSON.stringify(state.pinnedIds)); } catch {}
+    }
+    updatePinSessionButton();
     if (state.mode === 'sessions') renderSidebarList();
   } catch {}
 }
@@ -636,18 +704,24 @@ function resolveProjectLabel(c) {
   return 'Unassigned';
 }
 
-function renderSessionButtonHtml(c) {
+function renderSessionButtonHtml(c, { showProjectPill = false } = {}) {
   const active = c.id === state.activeConvId ? 'active' : '';
   const sub = c.isSubagent ? 'is-subagent' : '';
   const dotClass = c.active ? 'running' : '';
   const timeStr = formatCompactDate(c.updatedAt);
+  const isPinned = state.pinnedIds.includes(c.id);
+  const starTip = isPinned ? t('unpinSessionTip') : t('pinSessionTip');
+  const projBadge = showProjectPill
+    ? `<span class="session-project-pill">${escapeHtml(resolveProjectLabel(c))}</span>`
+    : `<span>${escapeHtml(c.id.slice(0, 8))}${c.stepCount ? ` · ${c.stepCount} ${escapeHtml(t('stepsStat'))}` : ''}</span>`;
   return `<button type="button" class="session-item ${active} ${sub}" data-conv-id="${escapeHtml(c.id)}" title="${escapeHtml(c.title)}">
     <div class="session-title-line">
       <span class="status-dot ${dotClass}"></span>
       <span class="session-title-text">${escapeHtml(c.title)}</span>
+      <span class="session-star-action ${isPinned ? 'pinned' : ''}" data-pin-conv="${escapeHtml(c.id)}" title="${escapeHtml(starTip)}">${isPinned ? '★' : '☆'}</span>
     </div>
     <div class="session-meta-line">
-      <span>${escapeHtml(c.id.slice(0, 8))}${c.stepCount ? ` · ${c.stepCount} ${escapeHtml(t('stepsStat'))}` : ''}</span>
+      ${projBadge}
       <span>${escapeHtml(timeStr)}</span>
     </div>
   </button>`;
@@ -792,7 +866,30 @@ function renderSidebarList() {
 
   const cutoffMs = Date.now() - THREE_DAYS_MS;
 
-  container.innerHTML = sortedGroups.map((grp) => {
+  const byId = new Map(filtered.map((c) => [c.id, c]));
+  const pinnedConvs = state.pinnedIds.map((id) => byId.get(id)).filter(Boolean);
+  const pinnedOpen = query ? true : state.pinnedGroupOpen;
+  const pinnedSectionHtml = pinnedConvs.length > 0
+    ? `<div class="project-folder pinned-folder" data-open="${pinnedOpen}">
+        <button type="button" class="project-folder-header" data-toggle-pinned-group>
+          <span class="project-folder-left">
+            ${CHEVRON_SVG}
+            <span class="project-folder-name">${escapeHtml(t('pinnedHeader'))}</span>
+          </span>
+          <span class="project-folder-meta">
+            <span class="project-folder-count">${pinnedConvs.length}</span>
+          </span>
+        </button>
+        <div class="project-folder-body">
+          ${pinnedConvs.map((c) => renderSessionButtonHtml(c, { showProjectPill: true })).join('')}
+        </div>
+      </div>`
+    : '';
+
+  state.allProjectKeys = sortedGroups.map((g) => g.key);
+  let anyOpen = false;
+
+  const projectsHtml = sortedGroups.map((grp) => {
     grp.items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     const activeWithin3d = grp.latestUpdatedAt >= cutoffMs;
     const containsActiveConv = grp.items.some((s) => s.id === state.activeConvId);
@@ -802,6 +899,7 @@ function renderSidebarList() {
       : (state.projectExpanded.has(grp.key)
           ? state.projectExpanded.get(grp.key)
           : (activeWithin3d || containsActiveConv));
+    if (isOpen) anyOpen = true;
 
     const rootAll = grp.items.filter((s) => !s.isSubagent);
     const subAll = grp.items.filter((s) => s.isSubagent);
@@ -877,6 +975,13 @@ function renderSidebarList() {
       </div>
     </div>`;
   }).join('');
+
+  state.anyProjectOpen = anyOpen;
+  const collapseBtn = el('toggle-all-projects-btn');
+  if (collapseBtn) {
+    collapseBtn.textContent = anyOpen ? t('collapseProjectsBtn') : t('expandProjectsBtn');
+  }
+  container.innerHTML = pinnedSectionHtml + projectsHtml;
 }
 
 function isHookActivelyRunning(hookState) {
@@ -917,9 +1022,11 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
         state.currentViewData = { ...state.currentViewData, ...data };
         applyHookPhase(data.hookState);
         const scrollEl = el('reader-scroll');
-        const nearBottom = scrollEl ? (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 140) : false;
+        const nearBottom = scrollEl ? (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 160) : false;
         transcriptRenderer.render(data.conversationId, data.view, {
           isRunning: isHookActivelyRunning(data.hookState),
+          hookState: data.hookState || null,
+          liveTaskLog: data.liveTaskLog || null,
           baseDir: state.currentBaseDir,
           subagents: state.currentViewData.subagents || [],
           parentSession: state.currentViewData.parentSession || null,
@@ -930,6 +1037,22 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
           scrollEl.scrollTop = scrollEl.scrollHeight;
         }
         renderCliToolsDrawer();
+      }
+    } catch {}
+  });
+
+  es.addEventListener('conversations-updated', () => {
+    loadConversations();
+  });
+
+  es.addEventListener('pinned-sessions', (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      if (Array.isArray(data.pinnedIds)) {
+        state.pinnedIds = data.pinnedIds;
+        try { localStorage.setItem('amp-pinned-sessions', JSON.stringify(state.pinnedIds)); } catch {}
+        updatePinSessionButton();
+        if (state.mode === 'sessions') renderSidebarList();
       }
     } catch {}
   });
@@ -948,18 +1071,27 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
     try {
       const data = JSON.parse(ev.data);
       if (data.conversationId === state.activeConvId) {
+        if (state.currentViewData) state.currentViewData.hookState = data.hookState;
         applyHookPhase(data.hookState);
         if (state.currentViewData?.view) {
+          const scrollEl = el('reader-scroll');
+          const nearBottom = scrollEl ? (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 160) : false;
           transcriptRenderer.render(state.activeConvId, state.currentViewData.view, {
             isRunning: isHookActivelyRunning(data.hookState),
+            hookState: data.hookState || null,
+            liveTaskLog: state.currentViewData.liveTaskLog || null,
             baseDir: state.currentBaseDir,
             subagents: state.currentViewData.subagents || [],
             parentSession: state.currentViewData.parentSession || null,
             cliInsights: state.currentViewData.cliInsights || null,
             artifacts: state.currentViewData.artifacts || [],
           });
+          if (state.autoFollow && nearBottom && scrollEl) {
+            scrollEl.scrollTop = scrollEl.scrollHeight;
+          }
         }
       }
+      loadConversations();
     } catch {}
   });
 
@@ -968,7 +1100,12 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
       const doc = JSON.parse(ev.data);
       loadCustomPreviews();
       if (doc.id === state.activePreviewId && state.mode === 'docs') {
+        const scrollEl = el('reader-scroll');
+        const nearBottom = scrollEl ? (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 160) : false;
         renderCustomPreview(doc);
+        if (state.autoFollow && nearBottom && scrollEl) {
+          scrollEl.scrollTop = scrollEl.scrollHeight;
+        }
       }
     } catch {}
   });
@@ -1041,6 +1178,112 @@ function scrollToLastUserTurn() {
   });
 }
 
+function renderFolderListingIntoContainer(bodyEl, listingData, targetMode = 'sidebar') {
+  if (!bodyEl || !listingData) return;
+  const folder = listingData.folder || '';
+  const parentFolder = listingData.parentFolder || '';
+  const entries = listingData.entries || [];
+
+  const iconForKind = (ent) => {
+    if (ent.isDirectory) return '📁';
+    if (ent.kind === 'markdown') return '📝';
+    if (ent.kind === 'pdf') return '📕';
+    if (ent.kind === 'video') return '🎬';
+    if (ent.kind === 'audio') return '🎵';
+    if (ent.kind === 'image') return '🖼';
+    if (ent.kind === 'csv') return '📊';
+    if (ent.kind === 'code') return '📄';
+    return '📦';
+  };
+
+  const rowsHtml = entries.length > 0
+    ? entries.map((ent) => `
+        <button type="button" class="folder-entry-row ${ent.isSelected ? 'selected' : ''}" data-folder-ent-path="${escapeHtml(ent.path)}" data-folder-ent-dir="${ent.isDirectory ? '1' : '0'}">
+          <span class="folder-entry-left">
+            <span>${iconForKind(ent)}</span>
+            <span class="folder-entry-name">${escapeHtml(ent.name)}${ent.isDirectory ? '/' : ''}</span>
+          </span>
+          <span class="folder-entry-size">${ent.isDirectory ? '' : escapeHtml(formatFileSize(ent.size))}</span>
+        </button>
+      `).join('')
+    : `<div style="padding:14px 8px;font-size:0.8rem;color:var(--text-faint);">${escapeHtml(t('emptyFolderHint'))}</div>`;
+
+  bodyEl.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:8px;">
+      <div class="media-toolbar">
+        <code style="font-size:0.73rem;word-break:break-all;flex:1;">${escapeHtml(folder)}</code>
+        <div style="display:flex;gap:6px;flex-shrink:0;">
+          ${parentFolder ? `<button type="button" class="code-mini-btn" data-folder-nav="${escapeHtml(parentFolder)}">${escapeHtml(t('parentFolderBtn'))}</button>` : ''}
+          <button type="button" class="code-mini-btn" data-copy-folder-path="${escapeHtml(folder)}">${escapeHtml(t('copyPathBtn'))}</button>
+        </div>
+      </div>
+      <div class="folder-browser-list">${rowsHtml}</div>
+    </div>
+  `;
+
+  bodyEl.querySelector('[data-copy-folder-path]')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    try {
+      await navigator.clipboard.writeText(btn.dataset.copyFolderPath || '');
+      btn.textContent = t('pathCopiedShort');
+      setTimeout(() => { btn.textContent = t('copyPathBtn'); }, 1300);
+    } catch {}
+  });
+
+  bodyEl.querySelector('[data-folder-nav]')?.addEventListener('click', (e) => {
+    browseFolderInPreview(e.currentTarget.dataset.folderNav, '', targetMode);
+  });
+
+  bodyEl.querySelectorAll('[data-folder-ent-path]').forEach((row) => {
+    row.addEventListener('click', () => {
+      const p = row.dataset.folderEntPath;
+      if (row.dataset.folderEntDir === '1') {
+        browseFolderInPreview(p, '', targetMode);
+      } else if (targetMode === 'popup') {
+        openInPopupModal(p, folder);
+      } else {
+        openInSidePreview(p, folder);
+      }
+    });
+  });
+
+  requestAnimationFrame(() => {
+    bodyEl.querySelector('.folder-entry-row.selected')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+}
+
+async function browseFolderInPreview(folderPath, selectFile = '', targetMode = 'sidebar', preloadedData = null) {
+  let data = preloadedData;
+  if (!data) {
+    const qs = new URLSearchParams({ path: folderPath });
+    if (selectFile) qs.set('select', selectFile);
+    const res = await apiFetch(`/api/folder-entries?${qs.toString()}`);
+    if (!res.ok) return;
+    data = await res.json();
+  }
+  const leafName = (data.folder || folderPath).replace(/[\\/]+$/, '').split(/[\\/]/).pop() || folderPath;
+  if (targetMode === 'popup') {
+    const modal = el('file-preview-modal');
+    modal?.classList.remove('hidden');
+    state.popupCurrent = { path: data.folder, rawHref: data.folder, baseDir: data.folder, kind: 'directory' };
+    el('popup-preview-title').textContent = t('folderViewTitle', { name: leafName });
+    el('popup-preview-path').textContent = data.folder;
+    el('popup-wrap-btn')?.classList.add('hidden');
+    el('popup-copy-btn')?.classList.add('hidden');
+    renderFolderListingIntoContainer(el('popup-preview-body'), data, 'popup');
+  } else {
+    el('side-preview-pane')?.classList.remove('hidden');
+    el('side-resizer')?.classList.remove('hidden');
+    state.sideCurrent = { path: data.folder, rawHref: data.folder, baseDir: data.folder, kind: 'directory' };
+    el('side-preview-title').textContent = t('folderViewTitle', { name: leafName });
+    el('side-preview-path').textContent = data.folder;
+    el('side-promote-btn')?.classList.add('hidden');
+    el('side-wrap-btn')?.classList.add('hidden');
+    el('side-copy-btn')?.classList.add('hidden');
+    renderFolderListingIntoContainer(el('side-preview-body'), data, 'sidebar');
+  }
+}
+
 async function revealInFolder(rawPath, baseDir = '', triggerBtn = null) {
   const effectivePath = (rawPath || '').trim() || (baseDir || '').trim() || state.currentBaseDir || '';
   if (!effectivePath) return;
@@ -1053,6 +1296,16 @@ async function revealInFolder(rawPath, baseDir = '', triggerBtn = null) {
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
       showToast(t('openFolderErr', { error: err.error || `HTTP ${res.status}` }), true);
+      return;
+    }
+    const data = await res.json();
+    if (data.openedInOs === false) {
+      if (data.folder) {
+        try { await navigator.clipboard.writeText(data.folder); } catch {}
+      }
+      const inPopup = Boolean(triggerBtn?.closest('#file-preview-modal'));
+      await browseFolderInPreview(data.folder, data.isDirectory ? '' : data.path, inPopup ? 'popup' : 'sidebar', data);
+      showToast(t('pathCopiedToast'));
       return;
     }
     if (triggerBtn) {
@@ -1068,10 +1321,12 @@ async function revealInFolder(rawPath, baseDir = '', triggerBtn = null) {
 async function openConversation(convId, { scrollToLatestUser = true } = {}) {
   state.mode = 'sessions';
   state.activeConvId = convId;
+  state.autoFollow = true;
   localStorage.setItem('amp-mode', 'sessions');
   localStorage.setItem('amp-last-conv', convId);
   syncUrlState({ conv: convId, flavor: state.flavor });
   updateModeButtons();
+  updatePinSessionButton();
 
   const meta = state.conversations.find((c) => c.id === convId);
   el('doc-title').textContent = meta?.title || `Session ${convId.slice(0, 8)}`;
@@ -1088,6 +1343,8 @@ async function openConversation(convId, { scrollToLatestUser = true } = {}) {
     applyHookPhase(data.hookState);
     transcriptRenderer.render(convId, data.view, {
       isRunning: isHookActivelyRunning(data.hookState),
+      hookState: data.hookState || null,
+      liveTaskLog: data.liveTaskLog || null,
       baseDir: state.currentBaseDir,
       subagents: data.subagents || [],
       parentSession: data.parentSession || null,
@@ -1609,17 +1866,65 @@ function applySavedMermaidModalSize() {
   }
 }
 
-function fitMermaidModalToScreen() {
+function getMermaidModalNatSize(svg) {
+  const dataW = Number(svg?.dataset?.natW || 0);
+  const dataH = Number(svg?.dataset?.natH || 0);
+  if (dataW > 0 && dataH > 0) return { natW: dataW, natH: dataH };
+  const vb = (svg?.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+  const natW = vb.length === 4 && vb[2] > 0 ? vb[2] : (svg?.clientWidth || 600);
+  const natH = vb.length === 4 && vb[3] > 0 ? vb[3] : (svg?.clientHeight || 400);
+  return { natW, natH };
+}
+
+let mermaidModalFitMode = 'auto'; // 'auto' | 'width' | 'screen' | 'manual'
+let isAutoFittingModal = false;
+
+function fitMermaidModalByMode(mode = mermaidModalFitMode) {
   const viewport = el('mermaid-modal-viewport');
   const svg = el('mermaid-modal-canvas')?.querySelector('svg');
   const ctrl = viewport?._panZoomCtrl;
   if (!viewport || !svg || !ctrl) return;
+  if (mode === 'manual') return;
+  mermaidModalFitMode = mode;
+
   const vRect = viewport.getBoundingClientRect();
-  const vb = (svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
-  const natW = vb.length === 4 && vb[2] > 0 ? vb[2] : (svg.clientWidth || 600);
-  const natH = vb.length === 4 && vb[3] > 0 ? vb[3] : (svg.clientHeight || 600);
-  const fitScale = Math.min(2.4, (vRect.width - 44) / natW, (vRect.height - 44) / natH);
-  ctrl.setTransform(fitScale, 0, 0);
+  if (vRect.width <= 0 || vRect.height <= 0) return;
+  const { natW, natH } = getMermaidModalNatSize(svg);
+  const padX = 36;
+  const padY = 36;
+  const widthScale = Math.min(4.0, (vRect.width - padX) / natW);
+  const screenScale = Math.min(3.8, (vRect.width - padX) / natW, (vRect.height - padY) / natH);
+
+  let targetScale = screenScale;
+  if (mode === 'width') {
+    targetScale = widthScale;
+  } else if (mode === 'auto') {
+    // Prefer filling horizontal space unless doing so overflows height severely
+    if (screenScale >= widthScale * 0.65) {
+      targetScale = screenScale;
+    } else {
+      targetScale = Math.min(widthScale, 2.4, Math.max(screenScale, (vRect.height * 1.65) / natH));
+    }
+  }
+
+  const scaledH = natH * targetScale;
+  const topAlignTy = scaledH > vRect.height - padY
+    ? Math.round((scaledH - vRect.height) / 2 + 18)
+    : 0;
+  isAutoFittingModal = true;
+  try {
+    ctrl.setTransform(targetScale, 0, topAlignTy);
+  } finally {
+    isAutoFittingModal = false;
+  }
+}
+
+function fitMermaidModalToScreen() {
+  fitMermaidModalByMode('screen');
+}
+
+function fitMermaidModalToWidth() {
+  fitMermaidModalByMode('width');
 }
 
 function openFullscreenMermaid(svgEl) {
@@ -1634,33 +1939,26 @@ function openFullscreenMermaid(svgEl) {
   const cloned = svgEl.cloneNode(true);
   cloned.style.maxWidth = 'none';
   cloned.style.maxHeight = 'none';
-  const vb = cloned.getAttribute('viewBox');
-  let natW = 700;
-  let natH = 500;
-  if (vb) {
-    const parts = vb.trim().split(/[\s,]+/).map(Number);
-    if (parts.length === 4 && parts[2] > 0) {
-      natW = parts[2];
-      natH = parts[3];
-      cloned.style.width = `${natW}px`;
-      cloned.style.height = `${natH}px`;
-    }
-  }
+  const { natW, natH } = getMermaidModalNatSize(cloned);
+  cloned.dataset.natW = String(natW);
+  cloned.dataset.natH = String(natH);
+  cloned.style.width = `${natW}px`;
+  cloned.style.height = `${natH}px`;
+
   canvas.innerHTML = '';
   canvas.appendChild(cloned);
   modal.classList.remove('hidden');
 
-  const ctrl = bindPanZoomViewport(viewport, canvas, {
+  bindPanZoomViewport(viewport, canvas, {
     wheelRequiresModifier: false,
     onScaleChange: (s) => {
+      if (!isAutoFittingModal) mermaidModalFitMode = 'manual';
       if (resetBtn) resetBtn.textContent = `${Math.round(s * 100)}%`;
     },
   });
 
   requestAnimationFrame(() => {
-    const vRect = viewport.getBoundingClientRect();
-    const fitScale = Math.min(2.0, (vRect.width - 48) / natW, (vRect.height - 48) / natH);
-    ctrl?.setTransform(fitScale, 0, 0);
+    fitMermaidModalByMode('auto');
   });
 }
 
@@ -1702,7 +2000,7 @@ function initMermaidModalResizer() {
         panel.style.width = '';
         panel.style.height = '';
         if (maxBtn) maxBtn.textContent = t('mmdMaximizeBtn');
-        requestAnimationFrame(fitMermaidModalToScreen);
+        requestAnimationFrame(() => fitMermaidModalByMode('auto'));
       });
     }
   });
@@ -1724,6 +2022,7 @@ function initMermaidModalResizer() {
 
     panel.style.width = `${Math.round(nextW)}px`;
     panel.style.height = `${Math.round(nextH)}px`;
+    fitMermaidModalByMode();
   });
 
   window.addEventListener('mouseup', () => {
@@ -1738,7 +2037,7 @@ function initMermaidModalResizer() {
     const isMax = panel.classList.toggle('maximized');
     maxBtn.textContent = isMax ? t('mmdRestoreBtn') : t('mmdMaximizeBtn');
     if (!isMax) applySavedMermaidModalSize();
-    requestAnimationFrame(fitMermaidModalToScreen);
+    requestAnimationFrame(() => fitMermaidModalByMode());
   });
 }
 
@@ -1821,6 +2120,7 @@ function updateModeButtons() {
   el('flavor-controls-row')?.classList.toggle('hidden', !isSessions);
   el('docs-controls-row')?.classList.toggle('hidden', isSessions);
   el('tools-dropdown-wrap')?.classList.toggle('hidden', !isSessions);
+  updatePinSessionButton();
   if (!isSessions) {
     el('cli-tools-drawer')?.classList.add('hidden');
   } else {
@@ -2175,6 +2475,32 @@ async function bootstrap() {
     el('sidebar')?.classList.toggle('collapsed');
   });
 
+  el('pin-session-btn')?.addEventListener('click', () => {
+    if (state.activeConvId) togglePinSession(state.activeConvId);
+  });
+
+  el('toggle-all-projects-btn')?.addEventListener('click', () => {
+    const shouldOpen = !state.anyProjectOpen;
+    for (const key of state.allProjectKeys) {
+      state.projectExpanded.set(key, shouldOpen);
+    }
+    renderSidebarList();
+  });
+
+  el('reader-scroll')?.addEventListener('scroll', () => {
+    const sc = el('reader-scroll');
+    if (!sc) return;
+    const distFromBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight;
+    state.autoFollow = distFromBottom < 160;
+  }, { passive: true });
+
+  el('reader-column')?.addEventListener('click', (e) => {
+    const wsBtn = e.target.closest('[data-reveal-workspace]');
+    if (wsBtn) {
+      revealInFolder(wsBtn.dataset.revealWorkspace, '', wsBtn);
+    }
+  });
+
   el('toc-toggle-btn')?.addEventListener('click', () => {
     const drawer = el('toc-drawer');
     if (!drawer) return;
@@ -2345,6 +2671,21 @@ async function bootstrap() {
       return;
     }
 
+    const pinAction = e.target.closest('[data-pin-conv]');
+    if (pinAction) {
+      e.preventDefault();
+      e.stopPropagation();
+      togglePinSession(pinAction.dataset.pinConv);
+      return;
+    }
+
+    const pinnedGroupToggle = e.target.closest('[data-toggle-pinned-group]');
+    if (pinnedGroupToggle) {
+      state.pinnedGroupOpen = !state.pinnedGroupOpen;
+      renderSidebarList();
+      return;
+    }
+
     const projToggle = e.target.closest('[data-toggle-project]');
     if (projToggle) {
       const key = projToggle.dataset.toggleProject;
@@ -2469,6 +2810,7 @@ async function bootstrap() {
     el('reader-scroll')?.scrollTo({ top: 0, behavior: 'smooth' });
   });
   el('jump-bottom-btn')?.addEventListener('click', () => {
+    state.autoFollow = true;
     const sc = el('reader-scroll');
     if (sc) sc.scrollTo({ top: sc.scrollHeight, behavior: 'smooth' });
   });
@@ -2715,6 +3057,7 @@ async function bootstrap() {
   el('mmd-modal-zoom-in')?.addEventListener('click', () => el('mermaid-modal-viewport')?._panZoomCtrl?.zoomBy(1.25));
   el('mmd-modal-zoom-out')?.addEventListener('click', () => el('mermaid-modal-viewport')?._panZoomCtrl?.zoomBy(0.8));
   el('mmd-modal-zoom-reset')?.addEventListener('click', () => el('mermaid-modal-viewport')?._panZoomCtrl?.reset());
+  el('mmd-modal-zoom-width')?.addEventListener('click', fitMermaidModalToWidth);
   el('mmd-modal-zoom-fit')?.addEventListener('click', fitMermaidModalToScreen);
   el('mmd-modal-download')?.addEventListener('click', () => {
     const svg = el('mermaid-modal-canvas')?.querySelector('svg');

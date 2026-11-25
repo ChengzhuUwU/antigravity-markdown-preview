@@ -1,7 +1,7 @@
 # HANDOFF — Antigravity Session Preview (`agy-session-preview`)
 
 > **Last Updated**: 2026-11-25
-> **Current Version**: `v0.3.0` (Synced with `origin/main`)
+> **Current Version**: `v0.3.1` (Synced with `origin/main`)
 > **Repository**: `E:\OpenSources2\agy_plugin\antigravity-markdown-preview`
 > **Remote**: `git@github.com:ChengzhuUwU/antigravity-session-preview.git` (`https://github.com/ChengzhuUwU/antigravity-session-preview`)
 
@@ -25,7 +25,8 @@ This document provides complete architectural context, user UX contracts, platfo
 
 | Date | Tag / Version | Commit | Highlights |
 |---|---|---|---|
-| 2026-11-25 | `v0.3.0` | `HEAD` | Renamed plugin to `agy-session-preview` (`Session Preview`); optional server password auth (`server/auth.mjs` + CLI `password set/cancel/disable/activate/print`), inline PDF/video/audio/CSV previews with HTTP `Range` (`206`) streaming, foreground Windows `📂 Folder` + cross-platform file picker fix, user-resizable larger `#mermaid-modal`, and live two-color Custom RGB palette panel |
+| 2026-11-25 | `v0.3.1` | `HEAD` | Adaptive horizontal-fill Mermaid sizing + `↔ Expand` / `↔ Fit Width`; sub-second SSE live streaming + `task-*.log` tail + progressive `--stdin`; `★ Pinned` sessions above projects; one-click project folder collapse/expand; verified Windows Explorer `📂 Folder` + in-app directory browser fallback; standardized `/preview` on `agy-preview` |
+| 2026-11-25 | `v0.3.0` | `15f262f` | Renamed plugin to `agy-session-preview` (`Session Preview`); optional server password auth (`server/auth.mjs` + CLI `password set/cancel/disable/activate/print`), inline PDF/video/audio/CSV previews with HTTP `Range` (`206`) streaming, foreground Windows `📂 Folder` + cross-platform file picker fix, user-resizable larger `#mermaid-modal`, and live two-color Custom RGB palette panel |
 | 2026-11-24 | `v0.2.1` | `b3f9872` | Unified persistent `Preferences ▾` menu left of `↻ Sync`; full bilingual UI (`English` default / `简体中文`) across topbar, Mermaid, previews, and CLI tools |
 | 2026-11-24 | `v0.2.0` | `9b118de` | Offline `mermaid@12.3.0` + built-in **ELK** orthogonal layout, rounded 90° elbows, GPT-style multi-stage pastel pills, pan/zoom & fullscreen modal (`#mermaid-modal`) |
 | 2026-11-24 | `v0.1.0` | `1330b0a` | `2 × 8` theme system, project-grouped sessions, SQLite FTS5 prompt search, collapsed `Execution process`, dual file previews, persistent `Docs / Clips`, `/btw` · `/context` · `/usage` inspector |
@@ -144,9 +145,10 @@ GFM merges consecutive `>` lines without an empty `>` separator into a single `<
 ### Gotcha 4 — Global Monospace `<code>` Styling on Windows
 Style `code, kbd, samp` and `:not(pre) > code` **globally** in `public/styles.css` (not only inside `.assistant-markdown`). Unstyled `<code>` elements outside `.assistant-markdown` fall back to pixelated `SimSun` bitmap fonts on Chinese Windows. Avoid rare Unicode symbols (`⛁`) lacking Windows DirectWrite font coverage; use clean inline SVGs instead.
 
-### Gotcha 5 — Windows PowerShell 5.1 & Background Process Teardown
+### Gotcha 5 — Windows PowerShell 5.1 & Always Launching via `agy-preview`
 - On this Windows host, `powershell.exe` is PowerShell 5.1 where `&&` is invalid syntax. Chain shell commands with `; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }` and `$ErrorActionPreference = 'Stop'`.
-- Non-daemon `run_command` tool calls execute inside a Windows Job Object that kills child processes when the command exits. If an Agent needs to leave `agy-preview` running from `run_command`, pass `IsDaemon: true` with `node bin/agy-preview.mjs --foreground --no-open`.
+- Always launch/manage the preview server using the global `agy-preview` CLI (`agy-preview --status`, `agy-preview --stop`, `agy-preview --conv <id>`). Note that processes spawned inside `agy`'s `run_command` sandbox cannot invoke Windows Desktop `explorer.exe` via DDE (`openedInOs: false`, falling back to the in-app directory browser), whereas `agy-preview` started from an external terminal has full Medium-Integrity Desktop Explorer permissions (`openedInOs: true`).
+- Never register `PreToolUse` in `hooks.json` (`PreToolUse` is a gating security hook in `agy` CLI; live streaming is handled non-blockingly via `SessionStart` / `PreInvocation` / `PostToolUse` / `PostInvocation` / `Stop` plus the `280ms` server-side byte-offset poller).
 
 ---
 

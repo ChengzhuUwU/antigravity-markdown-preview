@@ -12,7 +12,9 @@ Transform dense terminal streams, 1,000+ step agent trajectories, LaTeX math, wi
   - Single persistent **`Preferences ▾`** dropdown placed directly to the left of `↻ Sync`, consolidating **Language (`English` default / `简体中文`)**, **Typography & Layout (`Font: Sans / Serif`, `Width: Normal / Wide`, `Tables: Fit / Expand`)**, **2 Appearance Modes (`Light` / `Dark`)**, **8 Curated Color Palettes**, plus a live **Custom RGB Two-Color Panel (`Background` + `Accent`)** that updates the entire reading surface in real time.
 - **Server Password Protection (Optional, Disabled by Default)**:
   - Secure remote or shared server deployments (`--host 0.0.0.0`) via `agy-preview password <set | cancel | disable | activate | print>` or `/preview password ...`, backed by `HttpOnly` HMAC-signed session cookies and rate-limited login.
-- **Auto-Folded Execution & Project Grouping**:
+- **Auto-Folded Execution, Live Streaming & Pinned Sessions**:
+  - Star (`☆ / ★`) important conversations in the Preview topbar to keep them in a dedicated **`★ Pinned`** shelf above all workspace projects, and collapse or expand all project folders with a single **`⊟ Collapse / ⊞ Expand`** toggle.
+  - Sub-second live SSE streaming with flicker-free in-place turn updates, live running `task-*.log` command output tailing, and progressive `--stdin` pipe streaming.
   - Groups sessions by workspace project (auto-expanding projects active in the last 3 days) and folds subagents cleanly under `▸ N subagents` while keeping them accessible inside the session view (`View Subagent` / `← Parent`).
   - Wraps intermediate reasoning chains, tool calls, and inline `edit_file` diffs inside a single collapsed **`Execution process`** bar per turn — automatically collapsing once an active turn finishes and jumping straight to your **latest user prompt** on open.
   - Full-text search across project names, session titles, and **all historical user prompts** (powered by `node:sqlite` FTS5).
@@ -23,8 +25,8 @@ Transform dense terminal streams, 1,000+ step agent trajectories, LaTeX math, wi
 - **Rich Media & File Previews (`PDF`, `Video`, `Audio`, `CSV/TSV`, `Images`, `Code`) + Persistent `Docs / Clips` Shelf**:
   - Click any local hyperlink to inspect it in a **Popup Preview Modal**, or click **`Open in sidebar`** to pin it in the resizable **Right Split Pane** — supporting inline **PDFs** (`#page=N`), **Videos** (`.mp4`, `.webm`, `.mov`, etc. with HTTP `206 Partial Content` `Range` seeking, playback speed `0.5×–2×`, and loop toggle), **Audio** (`.mp3`, `.wav`, `.flac`, `.ogg`, `.m4a`), **CSV/TSV** tables, **Images**, **Markdown**, and **Code** (`#L16-L20` line-range highlighting), plus foreground **`📂 Folder` (Reveal in Explorer/Finder)**.
   - Dedicated **`Docs / Clips`** workspace persisted in OS user data (`%APPDATA%/agy-session-preview` on Windows, `~/Library/Application Support/agy-session-preview` on macOS, `~/.local/share/agy-session-preview` on Linux; legacy `agy-markdown-preview` data is automatically migrated) featuring pointer-hover previews, drag-and-drop sorting, inline renaming, and cross-platform native file picking.
-- **Publication-Grade Offline Markdown & Resizable Mermaid v12 ELK**:
-  - Zero-CDN offline `marked` + `highlight.js` + `KaTeX` (`$...$`, `$$...$$`, `\(...\)`, `\[...\]`) + **Mermaid v12 (`ELK` orthogonal port routing, rounded 90° elbows, multi-stage pastel pills, interactive pan/zoom, edge/corner user-resizable fullscreen modal with `100%` full-window toggle, and vector SVG export)**.
+- **Publication-Grade Offline Markdown & Adaptive Mermaid v12 ELK**:
+  - Zero-CDN offline `marked` + `highlight.js` + `KaTeX` (`$...$`, `$$...$$`, `\(...\)`, `\[...\]`) + **Mermaid v12 (`ELK` orthogonal port routing, rounded 90° elbows, multi-stage pastel pills, adaptive horizontal-fill inline sizing + `↔ Expand` full-viewport toggle, interactive pan/zoom, edge/corner user-resizable fullscreen modal with `↔ Fit Width` & `100%` full-window toggle, and vector SVG export)**.
   - Accurate GitHub & Obsidian Alerts (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`), CJK bold punctuation fix, and **Expandable Wide Tables** (`Tables: Expand` — natural column expansion capped at `50vw` with smooth horizontal slider).
 
 ## Screenshots

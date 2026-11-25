@@ -1,7 +1,7 @@
 {
   "name": "agy-session-preview",
   "displayName": "Session Preview",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Lightweight editorial Session, Markdown & Media previewer for Antigravity CLI & Desktop with 2x8 + Custom RGB themes, inline PDF/video/audio/CSV previews, resizable Mermaid ELK canvas, and optional server password protection.",
   "logo": "assets/logo.svg",
   "suggestedPrompts": [

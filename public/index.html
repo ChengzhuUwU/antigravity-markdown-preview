@@ -28,11 +28,12 @@
           <button id="mode-docs-btn" class="mode-btn" type="button" data-i18n="tabDocs">Docs / Clips</button>
         </div>
 
-        <!-- Sessions-only Flavor Selector -->
+        <!-- Sessions-only Flavor Selector + Collapse/Expand All Projects -->
         <div id="flavor-controls-row" class="sidebar-controls">
-          <select id="flavor-select" class="select-sm" data-i18n-title="flavorTip" title="Antigravity Product Flavor">
+          <select id="flavor-select" class="select-sm" style="flex:1;min-width:0;" data-i18n-title="flavorTip" title="Antigravity Product Flavor">
             <option value="antigravity-cli">antigravity-cli</option>
           </select>
+          <button id="toggle-all-projects-btn" class="pill-btn" type="button" data-i18n="collapseProjectsBtn" data-i18n-title="collapseProjectsTip" title="Collapse or expand all project folders">⊟ Collapse</button>
         </div>
 
         <!-- Docs/Clips-only Toolbar (Browse File + Manage Mode) -->
@@ -56,6 +57,7 @@
       <header class="topbar">
         <div class="topbar-left">
           <button id="sidebar-toggle-btn" class="icon-btn" title="Toggle Sidebar (Ctrl+B)" aria-label="Toggle Sidebar">☰</button>
+          <button id="pin-session-btn" class="icon-btn star-pin-btn hidden" type="button" data-i18n-title="pinSessionTip" title="Star to pin session above projects">☆</button>
           <span id="doc-title" class="doc-title" data-i18n="selectSession">Select a session</span>
           <span id="live-pill" class="live-pill" data-i18n="connecting">Connecting…</span>
         </div>
@@ -231,6 +233,7 @@
         <div class="side-preview-actions">
           <button id="mmd-modal-zoom-out" class="code-mini-btn" type="button" data-i18n-title="mmdZoomOutTip" title="Zoom Out">−</button>
           <button id="mmd-modal-zoom-reset" class="code-mini-btn" type="button" data-i18n-title="mmdZoomResetTip" title="Reset Zoom">100%</button>
+          <button id="mmd-modal-zoom-width" class="code-mini-btn" type="button" data-i18n="mmdFitWidthBtn" data-i18n-title="mmdFitWidthTip" title="Scale diagram horizontally to fill modal width">↔ Fit Width</button>
           <button id="mmd-modal-zoom-fit" class="code-mini-btn" type="button" data-i18n="mmdFitBtn" data-i18n-title="mmdFitTip" title="Fit entire diagram to window">⊡ Fit Screen</button>
           <button id="mmd-modal-zoom-in" class="code-mini-btn" type="button" data-i18n-title="mmdZoomInTip" title="Zoom In">+</button>
           <button id="mmd-modal-maximize" class="code-mini-btn" type="button" data-i18n="mmdMaximizeBtn" data-i18n-title="mmdMaximizeTip" title="Toggle 100% full window">⤢ Full Window</button>

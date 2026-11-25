@@ -2,6 +2,17 @@
 
 All notable changes to **Antigravity Session Preview (`agy-session-preview`)** will be documented in this file.
 
+## [0.3.1] - 2026-11-25
+
+### Added
+- **Sub-Second Live Streaming & Progressive `--stdin` Pipe**: Added a `280ms` byte-offset live poller (`server/app.mjs`, active only while SSE clients are connected) paired with real-time `.system_generated/tasks/task-*.log` command output tailing, flicker-free in-place turn patching (`patchTurnElementInPlace`), auto-follow scroll pause/resume, and progressive `180ms` chunk streaming for `agy-preview --stdin`.
+- **Pinned Sessions (`★ Pinned` / `★ 置顶会话`)**: Added a `☆ / ★` star toggle in the Preview topbar and on sidebar session rows, persisting starred sessions in `pinned-sessions.json` and displaying them in a dedicated `★ Pinned` section above all project folders.
+- **One-Click Project Folder Collapse / Expand (`⊟ Collapse` / `⊞ Expand`)**: Added a toggle button next to the sidebar flavor selector to collapse or expand all project folders at once without affecting pinned sessions.
+- **Adaptive Horizontal-Fill Mermaid Layout & `↔ Expand` / `↔ Fit Width`**: Disabled Mermaid's cyclic `useMaxWidth` collapse, added `ResizeObserver`-driven horizontal width filling across inline diagrams, added one-click `↔ Expand` (`↔ 铺宽`) full-viewport breakout on diagram cards, and added `↔ Fit Width` (`↔ 铺满宽度`) + live resize re-fitting inside `#mermaid-modal`.
+
+### Fixed
+- **Verified Native `📂 Folder` (`📂 目录`) + In-App Directory Browser Fallback**: Switched Windows Explorer launch to verbatim `/select,"<path>"` with `Shell.Application` window verification and foreground activation, automatically falling back to an interactive in-app folder browser (plus clipboard path copy) when running inside sandboxed or remote server environments, and standardized `/preview` on the global `agy-preview` CLI.
+
 ## [0.3.0] - 2026-11-25
 
 ### Added

@@ -464,18 +464,92 @@ async function main() {
     targetUrl += `?preview=${encodeURIComponent(created.data.id)}`;
     focusPayload.previewId = created.data.id;
   } else if (opts.stdin || (!process.stdin.isTTY && !opts.conv)) {
-    const piped = await readStdinAll();
-    if (piped.trim()) {
-      const created = await httpJson(serverInfo.port, '/api/previews', 'POST', {
-        content: piped,
-        title: opts.title || 'CLI Stream Output',
-        mode: opts.mode,
-      }, 2500, cliToken);
-      if (created.status !== 200) {
-        throw new Error(created.data?.error || 'Failed to push stdin preview');
+    // Progressive live streaming from stdin into Preview UI via SSE
+    const streamId = `stdin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const streamTitle = opts.title || 'CLI Stream Output';
+    let buffer = '';
+    let createdEntry = null;
+    let windowOpened = false;
+    let windowResultStream = { mode: 'already-open' };
+    let flushTimer = null;
+    let pushing = false;
+    let pendingPush = false;
+
+    const pushBuffer = async () => {
+      if (!buffer.trim()) return;
+      if (pushing) {
+        pendingPush = true;
+        return;
       }
-      targetUrl += `?preview=${encodeURIComponent(created.data.id)}`;
-      focusPayload.previewId = created.data.id;
+      pushing = true;
+      try {
+        const res = await httpJson(serverInfo.port, '/api/previews', 'POST', {
+          id: streamId,
+          content: buffer,
+          title: streamTitle,
+          mode: opts.mode,
+        }, 3000, cliToken);
+        if (res.status === 200 && res.data) {
+          createdEntry = res.data;
+          if (!windowOpened && opts.open) {
+            windowOpened = true;
+            const streamUrl = `http://127.0.0.1:${serverInfo.port}/?preview=${encodeURIComponent(createdEntry.id)}`;
+            if (!opts.newWindow && serverInfo.clients > 0) {
+              await httpJson(serverInfo.port, '/api/focus', 'POST', { previewId: createdEntry.id }, 1500, cliToken).catch(() => {});
+              windowResultStream = { mode: 'focused-existing-window', clients: serverInfo.clients };
+            } else if (serverInfo.reused) {
+              const resp = await httpJson(serverInfo.port, '/api/focus', 'POST', { openWindow: true, url: streamUrl }, 1500, cliToken).catch(() => null);
+              windowResultStream = resp?.data?.window || launchStandaloneWindow(streamUrl);
+            } else {
+              windowResultStream = launchStandaloneWindow(streamUrl);
+            }
+          }
+        }
+      } finally {
+        pushing = false;
+        if (pendingPush) {
+          pendingPush = false;
+          await pushBuffer();
+        }
+      }
+    };
+
+    await new Promise((resolveStdin) => {
+      process.stdin.on('data', (chunk) => {
+        buffer += chunk.toString('utf-8');
+        if (!createdEntry && buffer.trim()) {
+          pushBuffer().catch(() => {});
+        } else if (!flushTimer) {
+          flushTimer = setTimeout(() => {
+            flushTimer = null;
+            pushBuffer().catch(() => {});
+          }, 180);
+        }
+      });
+      process.stdin.on('end', async () => {
+        if (flushTimer) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
+        await pushBuffer().catch(() => {});
+        resolveStdin();
+      });
+      process.stdin.on('error', () => resolveStdin());
+    });
+
+    if (createdEntry) {
+      targetUrl += `?preview=${encodeURIComponent(createdEntry.id)}`;
+      const authStatus = authManager.getStatus();
+      console.log(JSON.stringify({
+        ok: true,
+        url: targetUrl,
+        host: serverInfo.host || '127.0.0.1',
+        port: serverInfo.port,
+        pid: serverInfo.pid,
+        authRequired: authStatus.authRequired,
+        window: windowResultStream,
+      }));
+      return;
     }
   } else if (opts.conv) {
     targetUrl += `?conv=${encodeURIComponent(opts.conv)}&flavor=${encodeURIComponent(opts.flavor)}`;

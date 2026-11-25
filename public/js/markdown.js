@@ -347,6 +347,7 @@ function createMarkedForBase(baseDir = '') {
               <button type="button" class="code-mini-btn" data-action="mmd-zoom-out" title="${escapeHtml(t('mmdZoomOutTip'))}">−</button>
               <button type="button" class="code-mini-btn" data-action="mmd-zoom-reset" data-zoom-label title="${escapeHtml(t('mmdZoomResetTip'))}">100%</button>
               <button type="button" class="code-mini-btn" data-action="mmd-zoom-in" title="${escapeHtml(t('mmdZoomInTip'))}">+</button>
+              <button type="button" class="code-mini-btn" data-action="mmd-toggle-wide" title="${escapeHtml(t('mmdWideTip'))}">${escapeHtml(t('mmdWideBtn'))}</button>
               <button type="button" class="code-mini-btn" data-action="mmd-fullscreen" title="${escapeHtml(t('mmdFullscreenTip'))}">${escapeHtml(t('mmdFullscreenBtn'))}</button>
               <button type="button" class="code-mini-btn" data-action="mmd-download-svg" title="${escapeHtml(t('mmdDownloadTip'))}">${escapeHtml(t('mmdDownloadBtn'))}</button>
               <button type="button" class="code-mini-btn" data-action="copy-raw">${escapeHtml(t('copyBtn'))}</button>
@@ -802,6 +803,7 @@ function configureMermaidInstance(theme, useElk = true) {
       cycleBreakingStrategy: 'GREEDY',
     },
     flowchart: {
+      useMaxWidth: false,
       htmlLabels: true,
       curve: 'linear',
       wrappingWidth: 260,
@@ -810,6 +812,12 @@ function configureMermaidInstance(theme, useElk = true) {
       rankSpacing: 38,
       subGraphTitleMargin: { top: 10, bottom: 8 },
     },
+    sequence: { useMaxWidth: false },
+    class: { useMaxWidth: false },
+    state: { useMaxWidth: false },
+    er: { useMaxWidth: false },
+    gantt: { useMaxWidth: false },
+    journey: { useMaxWidth: false },
     theme: 'base',
     fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
     themeVariables: isDark
@@ -865,6 +873,162 @@ async function ensureMermaid(theme) {
   return window.mermaid;
 }
 
+export function computeAdaptiveInlineMermaidSize(natW, natH, availW, viewportH = 900) {
+  const safeNatW = Math.max(1, Number(natW) || 600);
+  const safeNatH = Math.max(1, Number(natH) || 360);
+  const safeAvailW = Math.max(180, Number(availW) || safeNatW);
+  const safeViewportH = Math.max(480, Number(viewportH) || 900);
+
+  const widthScale = safeAvailW / safeNatW;
+  let scale = widthScale;
+
+  if (widthScale > 1) {
+    const maxUpscale = 2.6;
+    scale = Math.min(widthScale, maxUpscale);
+    if (safeNatH > safeNatW * 1.35) {
+      const maxComfortH = Math.max(980, safeViewportH * 1.15);
+      const heightCapScale = Math.max(1.25, maxComfortH / safeNatH);
+      scale = Math.min(scale, heightCapScale);
+    }
+  }
+
+  return {
+    width: Math.max(120, Math.round(safeNatW * scale)),
+    height: Math.max(60, Math.round(safeNatH * scale)),
+    scale,
+  };
+}
+
+function measureAndPrepareMermaidSvg(svgEl) {
+  if (!svgEl) return { natW: 600, natH: 360 };
+
+  let vx = 0;
+  let vy = 0;
+  let vw = 0;
+  let vh = 0;
+
+  const vbRaw = (svgEl.getAttribute('viewBox') || '').trim();
+  if (vbRaw) {
+    const parts = vbRaw.split(/[\s,]+/).map(Number);
+    if (parts.length === 4 && parts[2] > 0 && parts[3] > 0) {
+      [vx, vy, vw, vh] = parts;
+    }
+  }
+
+  if (!(vw > 0 && vh > 0)) {
+    const attrW = parseFloat(svgEl.getAttribute('width') || '') || 600;
+    const attrH = parseFloat(svgEl.getAttribute('height') || '') || 360;
+    vw = attrW;
+    vh = attrH;
+    svgEl.setAttribute('viewBox', `0 0 ${vw} ${vh}`);
+  }
+
+  // Tighten viewBox if diagram generator left excessive empty horizontal/vertical margins
+  try {
+    if (svgEl.isConnected && typeof svgEl.getBBox === 'function') {
+      const bbox = svgEl.getBBox();
+      if (bbox && bbox.width > 16 && bbox.height > 16) {
+        if (vw > bbox.width + 36 || vh > bbox.height + 36) {
+          vx = Number((bbox.x - 10).toFixed(2));
+          vy = Number((bbox.y - 10).toFixed(2));
+          vw = Number((bbox.width + 20).toFixed(2));
+          vh = Number((bbox.height + 20).toFixed(2));
+          svgEl.setAttribute('viewBox', `${vx} ${vy} ${vw} ${vh}`);
+        }
+      }
+    }
+  } catch {
+    // Ignore getBBox errors in non-rendered / hidden containers
+  }
+
+  svgEl.removeAttribute('width');
+  svgEl.removeAttribute('height');
+  svgEl.style.maxWidth = 'none';
+  svgEl.style.maxHeight = 'none';
+  svgEl.dataset.natW = String(vw);
+  svgEl.dataset.natH = String(vh);
+  return { natW: vw, natH: vh };
+}
+
+let mermaidResizeObserver = null;
+const observedScrollContainers = new WeakMap();
+
+export function fitInlineMermaidCard(card, { force = false } = {}) {
+  if (!card) return;
+  const stage = card.querySelector('.mermaid-stage');
+  const svgEl = stage?.querySelector('svg');
+  if (!stage || !svgEl) return;
+
+  if (card.classList.contains('expanded-width')) {
+    const scrollEl = card.closest('.reader-scroll');
+    const parentEl = card.parentElement;
+    if (scrollEl && parentEl && scrollEl.clientWidth > 0) {
+      const scrollRect = scrollEl.getBoundingClientRect();
+      const parentRect = parentEl.getBoundingClientRect();
+      const fullW = Math.max(parentRect.width, scrollEl.clientWidth - 40);
+      const fullLeft = scrollRect.left + 20;
+      card.style.width = `${Math.round(fullW)}px`;
+      card.style.marginLeft = `${Math.round(fullLeft - parentRect.left)}px`;
+    }
+  } else if (card.style.width || card.style.marginLeft) {
+    card.style.width = '';
+    card.style.marginLeft = '';
+  }
+
+  const stageW = stage.clientWidth;
+  if (stageW <= 0) return;
+  const availW = Math.max(180, stageW - 28);
+  if (!force && Math.abs(availW - (card._lastAvailW || 0)) < 2) return;
+  card._lastAvailW = availW;
+
+  const natW = Number(svgEl.dataset.natW) || 600;
+  const natH = Number(svgEl.dataset.natH) || 360;
+  const viewportH = typeof window !== 'undefined' ? window.innerHeight : 900;
+  const { width, height } = computeAdaptiveInlineMermaidSize(natW, natH, availW, viewportH);
+
+  svgEl.style.width = `${width}px`;
+  svgEl.style.height = `${height}px`;
+  stage.style.alignItems = height > 1360 ? 'flex-start' : 'center';
+}
+
+function observeMermaidCardResize(card) {
+  if (typeof ResizeObserver === 'undefined' || !card) return;
+  const stage = card.querySelector('.mermaid-stage');
+  if (!stage) return;
+
+  if (!mermaidResizeObserver) {
+    mermaidResizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const target = entry.target;
+        if (target.classList?.contains('mermaid-stage')) {
+          const ownerCard = target.closest('.mermaid-card');
+          if (ownerCard) fitInlineMermaidCard(ownerCard);
+        } else {
+          const cards = observedScrollContainers.get(target);
+          if (cards) {
+            cards.forEach((c) => {
+              if (!c.isConnected) cards.delete(c);
+              else if (c.classList.contains('expanded-width')) fitInlineMermaidCard(c, { force: true });
+            });
+          }
+        }
+      }
+    });
+  }
+
+  mermaidResizeObserver.observe(stage);
+  const scrollEl = card.closest('.reader-scroll');
+  if (scrollEl) {
+    let set = observedScrollContainers.get(scrollEl);
+    if (!set) {
+      set = new Set();
+      observedScrollContainers.set(scrollEl, set);
+      mermaidResizeObserver.observe(scrollEl);
+    }
+    set.add(card);
+  }
+}
+
 async function renderSingleMermaidCard(card, theme) {
   const src = card.dataset.mermaidSrc || '';
   const stage = card.querySelector('.mermaid-stage');
@@ -891,6 +1055,9 @@ async function renderSingleMermaidCard(card, theme) {
     canvas.innerHTML = rendered.svg;
     const svgEl = canvas.querySelector('svg');
     polishMermaidSvgToGptStyle(svgEl, theme === 'dark');
+    measureAndPrepareMermaidSvg(svgEl);
+    fitInlineMermaidCard(card, { force: true });
+    observeMermaidCardResize(card);
     card.dataset.mermaidRendered = 'true';
     card.dataset.mermaidTheme = theme;
 
@@ -1042,8 +1209,20 @@ export function attachCodeCardInteractions(root, { onOpenLocalLink, onOpenConver
       const stage = card.querySelector('.mermaid-stage');
       const ctrl = stage?._panZoomCtrl;
       if (!ctrl) return;
-      if (action === 'mmd-zoom-reset') ctrl.reset();
-      else ctrl.zoomBy(action === 'mmd-zoom-in' ? 1.25 : 0.8);
+      if (action === 'mmd-zoom-reset') {
+        fitInlineMermaidCard(card, { force: true });
+        ctrl.reset();
+      } else {
+        ctrl.zoomBy(action === 'mmd-zoom-in' ? 1.25 : 0.8);
+      }
+      return;
+    }
+
+    if (action === 'mmd-toggle-wide') {
+      const expanded = card.classList.toggle('expanded-width');
+      btn.textContent = expanded ? t('mmdCompactBtn') : t('mmdWideBtn');
+      fitInlineMermaidCard(card, { force: true });
+      card.querySelector('.mermaid-stage')?._panZoomCtrl?.reset();
       return;
     }
 

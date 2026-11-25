@@ -5,70 +5,57 @@ description: Open the lightweight editorial Session Preview window (or side pane
 
 # Session Preview (`/preview`)
 
-Open a lightweight, real-time standalone Session, Markdown & Media preview window where thinking chains and tool calls are collapsed by default, featuring customizable Light/Dark color themes + custom RGB panel, inline PDF/video/audio/CSV previews, KaTeX math, Mermaid v12 ELK diagrams, and optional frontend password protection for remote servers.
+Open a lightweight, real-time standalone Session, Markdown & Media preview window where thinking chains and tool calls are collapsed by default, featuring customizable Light/Dark color themes + custom RGB panel, inline PDF/video/audio/CSV previews, adaptive Mermaid v12 ELK diagrams, pinned sessions, and optional frontend password protection for remote servers.
 
-## Step 1: Locate the Launcher Script
+## Step 1: Always Use `agy-preview` CLI
 
-Resolve `bin/agy-preview.mjs` from the installed plugin directory (or workspace copy if developing locally):
-
-- Installed location: `~/.gemini/config/plugins/agy-session-preview/bin/agy-preview.mjs`
-- Legacy fallback: `~/.gemini/config/plugins/agy-markdown-preview/bin/agy-preview.mjs`
-- Workspace fallback: `./bin/agy-preview.mjs`
+Always invoke `agy-preview` (`~/.local/bin/agy-preview`, falling back to `~/.gemini/config/plugins/agy-session-preview/bin/agy-preview.mjs` only if `agy-preview` is not on `PATH`).
 
 ## Step 2: Handle Password Security Subcommands (If Requested)
 
-If the user invokes `/preview password ...` (or asks in natural language to **set / cancel / deactivate / activate / print** the preview frontend password), run `bin/agy-preview.mjs` synchronously (`IsDaemon: false`, `WaitMsBeforeAsync: 5000`):
+If the user invokes `/preview password ...` (or asks in natural language to **set / cancel / deactivate / activate / print** the preview frontend password), run `agy-preview` synchronously (`IsDaemon: false`, `WaitMsBeforeAsync: 5000`):
 
 - **Set & activate password** (`/preview password set <PASSWORD>`):
   ```powershell
-  $launcher = "$HOME\.gemini\config\plugins\agy-session-preview\bin\agy-preview.mjs"; if (!(Test-Path $launcher)) { $launcher = "$HOME\.gemini\config\plugins\agy-markdown-preview\bin\agy-preview.mjs" }; if (!(Test-Path $launcher)) { $launcher = ".\bin\agy-preview.mjs" }; node $launcher password set "<PASSWORD>"
+  agy-preview password set "<PASSWORD>"
   ```
 - **Cancel / clear password** (`/preview password cancel` or `clear`):
   ```powershell
-  $launcher = "$HOME\.gemini\config\plugins\agy-session-preview\bin\agy-preview.mjs"; if (!(Test-Path $launcher)) { $launcher = "$HOME\.gemini\config\plugins\agy-markdown-preview\bin\agy-preview.mjs" }; if (!(Test-Path $launcher)) { $launcher = ".\bin\agy-preview.mjs" }; node $launcher password cancel
+  agy-preview password cancel
   ```
 - **Temporarily deactivate password check** (`/preview password disable` or `off`, keeps saved password):
   ```powershell
-  $launcher = "$HOME\.gemini\config\plugins\agy-session-preview\bin\agy-preview.mjs"; if (!(Test-Path $launcher)) { $launcher = "$HOME\.gemini\config\plugins\agy-markdown-preview\bin\agy-preview.mjs" }; if (!(Test-Path $launcher)) { $launcher = ".\bin\agy-preview.mjs" }; node $launcher password disable
+  agy-preview password disable
   ```
 - **Activate password protection** (`/preview password activate [OPTIONAL_PASSWORD]` — re-enables saved password or generates a random one if unset):
   ```powershell
-  $launcher = "$HOME\.gemini\config\plugins\agy-session-preview\bin\agy-preview.mjs"; if (!(Test-Path $launcher)) { $launcher = "$HOME\.gemini\config\plugins\agy-markdown-preview\bin\agy-preview.mjs" }; if (!(Test-Path $launcher)) { $launcher = ".\bin\agy-preview.mjs" }; node $launcher password activate
+  agy-preview password activate
   ```
 - **Print current password & status** (`/preview password print` or `show`):
   ```powershell
-  $launcher = "$HOME\.gemini\config\plugins\agy-session-preview\bin\agy-preview.mjs"; if (!(Test-Path $launcher)) { $launcher = "$HOME\.gemini\config\plugins\agy-markdown-preview\bin\agy-preview.mjs" }; if (!(Test-Path $launcher)) { $launcher = ".\bin\agy-preview.mjs" }; node $launcher password print
+  agy-preview password print
   ```
 
-## Step 3: Launch or Focus the Standalone Window
+## Step 3: Launch or Focus via `agy-preview`
 
-> [!IMPORTANT]
-> Antigravity's `run_command` terminates non-daemon subprocess trees (Windows Job Objects / process groups) when a tool call finishes. Therefore, **you MUST set `IsDaemon: true` and `WaitMsBeforeAsync: 3000`** with `--foreground` so the local HTTP + SSE preview server stays alive in the background across turns! (If a preview server is already running on port `19420`, `--foreground` automatically reuses it, focuses/opens the window, and exits cleanly.)
+1. First check `agy-preview --status`.
+   - **If `running: true`**: run `agy-preview --conv "<CONVERSATION_ID>" --open` (or `agy-preview --file "<FILE_PATH>" --open`) with `IsDaemon: false` — this reuses the existing `agy-preview` server (preserving full native OS File Explorer permissions) and focuses/opens the window immediately.
+   - **If `running: false`**: call `run_command` with **`IsDaemon: true`** and **`WaitMsBeforeAsync: 3000`** using `agy-preview --foreground`:
 
 ### Case A — Preview the current (or specific) Antigravity conversation
 
-Call `run_command` with **`IsDaemon: true`** and **`WaitMsBeforeAsync: 3000`**, substituting `<CONVERSATION_ID>` from `<user_information>`:
-
-- **PowerShell (Windows):**
-  ```powershell
-  $launcher = "$HOME\.gemini\config\plugins\agy-session-preview\bin\agy-preview.mjs"; if (!(Test-Path $launcher)) { $launcher = "$HOME\.gemini\config\plugins\agy-markdown-preview\bin\agy-preview.mjs" }; if (!(Test-Path $launcher)) { $launcher = ".\bin\agy-preview.mjs" }; node $launcher --foreground --conv "<CONVERSATION_ID>" --open
-  ```
-
-- **Bash (macOS / Linux):**
-  ```bash
-  LAUNCHER="$HOME/.gemini/config/plugins/agy-session-preview/bin/agy-preview.mjs"; [ -f "$LAUNCHER" ] || LAUNCHER="$HOME/.gemini/config/plugins/agy-markdown-preview/bin/agy-preview.mjs"; [ -f "$LAUNCHER" ] || LAUNCHER="./bin/agy-preview.mjs"; node "$LAUNCHER" --foreground --conv "<CONVERSATION_ID>" --open
-  ```
+```powershell
+agy-preview --foreground --conv "<CONVERSATION_ID>" --open
+```
 
 ### Case B — User specified a Markdown / PDF / Video / JSONL / text file (`/preview path/to/file`)
 
-Call `run_command` with **`IsDaemon: true`** and **`WaitMsBeforeAsync: 3000`**, passing `--foreground --file "<FILE_PATH>" --open`:
-
 ```powershell
-$launcher = "$HOME\.gemini\config\plugins\agy-session-preview\bin\agy-preview.mjs"; if (!(Test-Path $launcher)) { $launcher = "$HOME\.gemini\config\plugins\agy-markdown-preview\bin\agy-preview.mjs" }; if (!(Test-Path $launcher)) { $launcher = ".\bin\agy-preview.mjs" }; node $launcher --foreground --file "<FILE_PATH>" --open
+agy-preview --foreground --file "<FILE_PATH>" --open
 ```
 
 ## Step 4: Respond Concisely
 
-Return the preview URL printed by the launcher (`http://127.0.0.1:19420/...`), mention key shortcuts (`R` sync, `T` theme, `O` outline, `P` open/paste Markdown), and if running inside Antigravity 2.0 Desktop, also provide the side-pane link:
+Return the preview URL printed by `agy-preview` (`http://127.0.0.1:19420/...`), mention key shortcuts (`R` sync, `T` theme, `O` outline, `P` open/paste Markdown), and if running inside Antigravity 2.0 Desktop, also provide the side-pane link:
 
 `[Session Preview](sidecar://agy-session-preview/preview/)`

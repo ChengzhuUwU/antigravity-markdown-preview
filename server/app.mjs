@@ -1,11 +1,12 @@
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, watch, writeFileSync } from 'node:fs';
+import { closeSync, createReadStream, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync, watch, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   TranscriptReader,
   detectFlavors,
+  getGeminiRoot,
   getRollingUsageStats,
   listArtifacts,
   listBtwCommands,
@@ -356,31 +357,153 @@ function parseByteRangeHeader(rangeHeader, totalSize) {
   return { start, end };
 }
 
-function revealOnWindowsExplorer(targetPath, isDirectory) {
+function normalizeComparePath(p) {
+  return String(p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+export function buildDirectoryListing(folderPath, highlightPath = '') {
+  const normHighlight = normalizeComparePath(highlightPath);
+  const rawEntries = readdirSync(folderPath, { withFileTypes: true }).slice(0, 350);
+  const entries = [];
+  for (const ent of rawEntries) {
+    const fullPath = join(folderPath, ent.name);
+    let isDir = ent.isDirectory();
+    let size = 0;
+    try {
+      const st = statSync(fullPath);
+      isDir = st.isDirectory();
+      size = isDir ? 0 : st.size;
+    } catch {}
+    const kind = isDir ? 'directory' : classifyFile(fullPath).kind;
+    entries.push({
+      name: ent.name,
+      path: fullPath,
+      isDirectory: isDir,
+      size,
+      kind,
+      isSelected: Boolean(normHighlight && normalizeComparePath(fullPath) === normHighlight),
+    });
+  }
+  entries.sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+    return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+  });
+  const parent = dirname(folderPath);
+  return {
+    folder: folderPath,
+    parentFolder: parent && parent !== folderPath ? parent : '',
+    entries,
+  };
+}
+
+async function revealOnWindowsExplorer(targetPath, isDirectory) {
   const winPath = targetPath.replace(/\//g, '\\');
-  const psCmd = [
-    `$p = $env:AMP_REVEAL_PATH`,
-    `if ($env:AMP_IS_DIR -eq '1') { Start-Process explorer.exe -ArgumentList ('"' + $p + '"') }`,
-    `else { Start-Process explorer.exe -ArgumentList ('/select,"' + $p + '"') }`,
-    `Start-Sleep -Milliseconds 180`,
+  const folderPath = isDirectory ? winPath : dirname(winPath);
+  const normExpectedFolder = normalizeComparePath(folderPath);
+
+  try {
+    const explorerArg = isDirectory ? `"${winPath}"` : `/select,"${winPath}"`;
+    const ex = spawn('explorer.exe', [explorerArg], {
+      windowsVerbatimArguments: true,
+      detached: true,
+      stdio: 'ignore',
+    });
+    ex.on('error', () => {});
+    ex.unref();
+  } catch {}
+
+  await new Promise((r) => setTimeout(r, 420));
+
+  // Verify via Shell.Application whether Desktop Explorer opened the folder (and bring to front)
+  const checkPs = [
+    `$target = $env:AMP_CHECK_FOLDER`,
+    `$opened = $false`,
     `try {`,
-    `  $ws = New-Object -ComObject WScript.Shell`,
-    `  $folderLeaf = if ($env:AMP_IS_DIR -eq '1') { Split-Path $p -Leaf } else { Split-Path (Split-Path $p -Parent) -Leaf }`,
-    `  if ($folderLeaf) { [void]$ws.AppActivate($folderLeaf) }`,
+    `  $sh = New-Object -ComObject Shell.Application`,
+    `  foreach ($w in @($sh.Windows())) {`,
+    `    $u = [string]$w.LocationURL`,
+    `    if (-not $u) { continue }`,
+    `    $p = ([uri]$u).LocalPath.Replace('\\', '/').TrimEnd('/').ToLowerInvariant()`,
+    `    if ($p -eq $target) {`,
+    `      $opened = $true`,
+    `      try { (New-Object -ComObject WScript.Shell).AppActivate([string]$w.LocationName) | Out-Null } catch {}`,
+    `      break`,
+    `    }`,
+    `  }`,
     `} catch {}`,
+    `if ($opened) { Write-Output 'OPENED' } else { Write-Output 'BLOCKED' }`,
   ].join('; ');
 
-  const child = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', psCmd], {
-    detached: true,
-    windowsHide: true,
-    stdio: 'ignore',
-    env: {
-      ...process.env,
-      AMP_REVEAL_PATH: winPath,
-      AMP_IS_DIR: isDirectory ? '1' : '0',
-    },
+  const status = await new Promise((resolveCheck) => {
+    let out = '';
+    let settled = false;
+    const done = (val) => {
+      if (settled) return;
+      settled = true;
+      resolveCheck(val);
+    };
+    const timer = setTimeout(() => done('BLOCKED'), 1500);
+    try {
+      const child = spawn('powershell.exe', ['-NoProfile', '-Command', checkPs], {
+        windowsHide: true,
+        env: { ...process.env, AMP_CHECK_FOLDER: normExpectedFolder },
+      });
+      child.stdout.on('data', (c) => { out += c.toString('utf-8'); });
+      child.on('error', () => { clearTimeout(timer); done('BLOCKED'); });
+      child.on('close', () => { clearTimeout(timer); done(out.trim()); });
+    } catch {
+      clearTimeout(timer);
+      done('BLOCKED');
+    }
   });
-  child.unref();
+
+  return status.includes('OPENED');
+}
+
+function readActiveTaskLogTail(convDir) {
+  if (!convDir) return null;
+  const tasksDir = join(convDir, '.system_generated', 'tasks');
+  if (!existsSync(tasksDir)) return null;
+  try {
+    const now = Date.now();
+    let newest = null;
+    for (const name of readdirSync(tasksDir)) {
+      if (!name.endsWith('.log')) continue;
+      const full = join(tasksDir, name);
+      try {
+        const st = statSync(full);
+        if (!st.isFile() || st.size === 0 || now - st.mtimeMs > 20000) continue;
+        if (!newest || st.mtimeMs > newest.mtimeMs) {
+          newest = { name, full, size: st.size, mtimeMs: st.mtimeMs };
+        }
+      } catch {}
+    }
+    if (!newest) return null;
+    const maxBytes = 3200;
+    const readLen = Math.min(newest.size, maxBytes);
+    const startOffset = newest.size - readLen;
+    const buf = Buffer.alloc(readLen);
+    const fd = openSync(newest.full, 'r');
+    try {
+      readSync(fd, buf, 0, readLen, startOffset);
+    } finally {
+      try { closeSync(fd); } catch {}
+    }
+    let text = buf.toString('utf-8');
+    if (startOffset > 0) {
+      const nl = text.indexOf('\n');
+      if (nl !== -1 && nl < 200) text = text.slice(nl + 1);
+    }
+    return {
+      filename: newest.name,
+      path: newest.full,
+      size: newest.size,
+      updatedAt: newest.mtimeMs,
+      text: text.trimEnd(),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function createPreviewEngine({
@@ -393,8 +516,34 @@ export function createPreviewEngine({
   const customStore = new CustomPreviewStore(storePersistPath !== undefined ? { persistPath: storePersistPath } : {});
   const authManager = new PreviewAuthManager(authPersistPath !== undefined ? { persistPath: authPersistPath } : {});
   const btwNotesPath = customStore.persistPath ? join(dirname(customStore.persistPath), 'btw-notes.json') : '';
+  const pinnedSessionsPath = customStore.persistPath ? join(dirname(customStore.persistPath), 'pinned-sessions.json') : '';
   const btwNotesByConv = new Map();
   let btwNotesMtimeMs = 0;
+  let pinnedSessionIds = [];
+  let pinnedMtimeMs = 0;
+
+  const loadPinnedFromDisk = () => {
+    if (!pinnedSessionsPath || !existsSync(pinnedSessionsPath)) return;
+    try {
+      const st = statSync(pinnedSessionsPath);
+      if (st.mtimeMs <= pinnedMtimeMs + 1) return;
+      const arr = JSON.parse(readFileSync(pinnedSessionsPath, 'utf-8'));
+      if (Array.isArray(arr)) {
+        pinnedSessionIds = Array.from(new Set(arr.filter((x) => typeof x === 'string' && x.trim())));
+      }
+      pinnedMtimeMs = st.mtimeMs;
+    } catch {}
+  };
+  loadPinnedFromDisk();
+
+  const savePinnedToDisk = () => {
+    if (!pinnedSessionsPath) return;
+    try {
+      mkdirSync(dirname(pinnedSessionsPath), { recursive: true });
+      writeFileSync(pinnedSessionsPath, JSON.stringify(pinnedSessionIds, null, 2), 'utf-8');
+      pinnedMtimeMs = statSync(pinnedSessionsPath).mtimeMs;
+    } catch {}
+  };
 
   const loadBtwNotesFromDisk = () => {
     if (!btwNotesPath || !existsSync(btwNotesPath)) return;
@@ -516,6 +665,80 @@ export function createPreviewEngine({
   }, 15000);
   heartbeat.unref?.();
 
+  // Sub-second live streaming poller (active only when >=1 SSE client is connected; overcomes Windows fs.watch buffering)
+  const streamSnapshots = new Map(); // convId -> { tPath, size, mtimeMs, taskSig }
+  const dbMtimeSnapshots = new Map(); // flavor -> mtimeMs
+  let streamTickCount = 0;
+
+  const streamPoller = setInterval(() => {
+    if (sseClients.size === 0) return;
+    streamTickCount++;
+
+    const watchedConvs = new Map();
+    for (const c of sseClients) {
+      if (c.convId && !watchedConvs.has(c.convId)) {
+        watchedConvs.set(c.convId, c.flavorHint);
+      }
+    }
+
+    for (const [convId, flavorHint] of watchedConvs.entries()) {
+      try {
+        const resolved = resolveConversationDir(convId, flavorHint);
+        if (!resolved) continue;
+        const tPath = resolveTranscriptPath(resolved.dir);
+        if (!tPath || !existsSync(tPath)) continue;
+
+        const st = statSync(tPath);
+        const hookState = liveHookStates.get(convId) || null;
+        const taskTail = readActiveTaskLogTail(resolved.dir);
+        const taskSig = taskTail ? `${taskTail.filename}:${taskTail.size}` : '';
+
+        const prev = streamSnapshots.get(convId);
+        if (
+          prev &&
+          prev.tPath === tPath &&
+          prev.size === st.size &&
+          prev.mtimeMs === st.mtimeMs &&
+          prev.taskSig === taskSig
+        ) {
+          continue;
+        }
+
+        streamSnapshots.set(convId, { tPath, size: st.size, mtimeMs: st.mtimeMs, taskSig });
+        const { view, updatedAt } = reader.read(tPath);
+        broadcastEvent(
+          'transcript',
+          {
+            conversationId: convId,
+            flavor: resolved.flavor,
+            updatedAt: Math.max(updatedAt, taskTail?.updatedAt || 0),
+            view,
+            hookState,
+            liveTaskLog: taskTail,
+          },
+          (c) => !c.convId || c.convId === convId
+        );
+      } catch {}
+    }
+
+    // Periodically check conversation_summaries.db mtime so sidebar session list & running dots stay live
+    if (streamTickCount % 7 === 0) {
+      for (const flavor of detectFlavors()) {
+        try {
+          const dbPath = join(getGeminiRoot(), flavor, 'conversation_summaries.db');
+          if (!existsSync(dbPath)) continue;
+          const mtime = statSync(dbPath).mtimeMs;
+          const prevDbMtime = dbMtimeSnapshots.get(flavor);
+          if (prevDbMtime !== undefined && mtime > prevDbMtime + 1) {
+            broadcastEvent('conversations-updated', { flavor, updatedAt: Date.now() });
+          }
+          dbMtimeSnapshots.set(flavor, mtime);
+        } catch {}
+      }
+    }
+  }, 280);
+  streamPoller.unref?.();
+
   async function handleRequest(req, res) {
     const url = new URL(req.url || '/', 'http://127.0.0.1');
     const pathname = url.pathname;
@@ -609,9 +832,40 @@ export function createPreviewEngine({
     }
 
     if (req.method === 'GET' && pathname === '/api/conversations') {
+      loadPinnedFromDisk();
       const flavor = url.searchParams.get('flavor') || 'antigravity-cli';
       const limit = Math.min(2000, Math.max(10, Number(url.searchParams.get('limit')) || 1000));
-      return sendJson(res, 200, { flavor, conversations: listConversations(flavor, limit) });
+      return sendJson(res, 200, {
+        flavor,
+        conversations: listConversations(flavor, limit),
+        pinnedIds: pinnedSessionIds,
+      });
+    }
+
+    if (pathname === '/api/pinned-sessions') {
+      loadPinnedFromDisk();
+      if (req.method === 'GET') {
+        return sendJson(res, 200, { pinnedIds: pinnedSessionIds });
+      }
+      if (req.method === 'POST') {
+        try {
+          const body = await readJsonBody(req);
+          const convId = String(body.conversationId || '').trim();
+          if (!convId) return sendJson(res, 400, { error: 'conversationId is required' });
+          const isCurrentlyPinned = pinnedSessionIds.includes(convId);
+          const nextPinned = typeof body.pinned === 'boolean' ? body.pinned : !isCurrentlyPinned;
+          if (nextPinned) {
+            pinnedSessionIds = [convId, ...pinnedSessionIds.filter((id) => id !== convId)];
+          } else {
+            pinnedSessionIds = pinnedSessionIds.filter((id) => id !== convId);
+          }
+          savePinnedToDisk();
+          broadcastEvent('pinned-sessions', { pinnedIds: pinnedSessionIds });
+          return sendJson(res, 200, { ok: true, pinned: nextPinned, pinnedIds: pinnedSessionIds });
+        } catch (err) {
+          return sendJson(res, 400, { error: err.message });
+        }
+      }
     }
 
     const viewMatch = pathname.match(/^\/api\/conversations\/([^/]+)\/view$/);
@@ -633,6 +887,18 @@ export function createPreviewEngine({
         : null;
       loadBtwNotesFromDisk();
       ensureTranscriptWatch(convId, resolved.flavor);
+      const liveTaskLog = readActiveTaskLogTail(resolved.dir);
+      if (tPath && existsSync(tPath)) {
+        try {
+          const st = statSync(tPath);
+          streamSnapshots.set(convId, {
+            tPath,
+            size: st.size,
+            mtimeMs: st.mtimeMs,
+            taskSig: liveTaskLog ? `${liveTaskLog.filename}:${liveTaskLog.size}` : '',
+          });
+        } catch {}
+      }
       return sendJson(res, 200, {
         conversationId: convId,
         flavor: resolved.flavor,
@@ -651,6 +917,7 @@ export function createPreviewEngine({
         view,
         artifacts,
         hookState: liveHookStates.get(convId) || null,
+        liveTaskLog,
       });
     }
 
@@ -699,7 +966,7 @@ export function createPreviewEngine({
       return sendJson(res, 200, stepData);
     }
 
-    // Reveal target file (or its parent directory) in the native OS file manager
+    // Reveal target file (or its parent directory) in the native OS file manager, with verified fallback directory listing
     if (req.method === 'POST' && pathname === '/api/reveal-in-folder') {
       try {
         const body = await readJsonBody(req);
@@ -709,19 +976,59 @@ export function createPreviewEngine({
         }
         const resolvedPath = check.resolvedPath;
         const folderPath = check.isDirectory ? resolvedPath : dirname(resolvedPath);
-        if (!body.dryRun) {
-          if (process.platform === 'win32') {
-            revealOnWindowsExplorer(resolvedPath, Boolean(check.isDirectory));
-          } else if (process.platform === 'darwin') {
-            const args = check.isDirectory ? [resolvedPath] : ['-R', resolvedPath];
-            const child = spawn('open', args, { detached: true, stdio: 'ignore' });
-            child.unref();
+        if (body.dryRun) {
+          return sendJson(res, 200, { ok: true, openedInOs: true, path: resolvedPath, folder: folderPath, isDirectory: Boolean(check.isDirectory) });
+        }
+
+        let openedInOs = true;
+        if (process.platform === 'win32') {
+          openedInOs = await revealOnWindowsExplorer(resolvedPath, Boolean(check.isDirectory));
+        } else if (process.platform === 'darwin') {
+          const args = check.isDirectory ? [resolvedPath] : ['-R', resolvedPath];
+          const child = spawn('open', args, { detached: true, stdio: 'ignore' });
+          child.on('error', () => {});
+          child.unref();
+        } else {
+          if (!process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+            openedInOs = false;
           } else {
             const child = spawn('xdg-open', [folderPath], { detached: true, stdio: 'ignore' });
+            child.on('error', () => {});
             child.unref();
           }
         }
-        return sendJson(res, 200, { ok: true, path: resolvedPath, folder: folderPath, isDirectory: Boolean(check.isDirectory) });
+
+        const listing = !openedInOs ? buildDirectoryListing(folderPath, check.isDirectory ? '' : resolvedPath) : null;
+        return sendJson(res, 200, {
+          ok: true,
+          openedInOs,
+          path: resolvedPath,
+          folder: folderPath,
+          isDirectory: Boolean(check.isDirectory),
+          ...(listing || {}),
+        });
+      } catch (err) {
+        return sendJson(res, 500, { error: err.message });
+      }
+    }
+
+    // Browse directory entries directly inside Preview UI (used by In-App Folder View fallback)
+    if (req.method === 'GET' && pathname === '/api/folder-entries') {
+      const targetPath = url.searchParams.get('path') || '';
+      const baseDir = url.searchParams.get('base') || '';
+      const highlight = url.searchParams.get('select') || '';
+      const check = resolveSafeFilePath(targetPath, baseDir, { allowDirectory: true });
+      if (check.error) {
+        return sendJson(res, check.status || 400, { error: check.error });
+      }
+      const folderPath = check.isDirectory ? check.resolvedPath : dirname(check.resolvedPath);
+      const selectedFile = highlight || (check.isDirectory ? '' : check.resolvedPath);
+      try {
+        return sendJson(res, 200, {
+          ok: true,
+          path: check.resolvedPath,
+          ...buildDirectoryListing(folderPath, selectedFile),
+        });
       } catch (err) {
         return sendJson(res, 500, { error: err.message });
       }
@@ -1053,7 +1360,7 @@ export function createPreviewEngine({
       });
       res.write(`event: connected\ndata: ${JSON.stringify({ ok: true, convId, previewId })}\n\n`);
 
-      const client = { res, convId, previewId };
+      const client = { res, convId, previewId, flavorHint };
       sseClients.add(client);
       req.on('close', () => {
         sseClients.delete(client);
@@ -1089,6 +1396,7 @@ export function createPreviewEngine({
 
   function close() {
     clearInterval(heartbeat);
+    clearInterval(streamPoller);
     for (const entry of watchers.values()) {
       if (entry.timer) clearTimeout(entry.timer);
       try { entry.watcher.close(); } catch {}

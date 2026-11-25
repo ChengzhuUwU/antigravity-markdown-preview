@@ -19,7 +19,13 @@ import {
 } from '../server/custom-preview.mjs';
 import { PreviewAuthManager } from '../server/auth.mjs';
 import { classifyFile, resolveSafeFilePath, startStandaloneServer } from '../server/app.mjs';
-import { classifyHref, isCodeFilePath, isPreviewableFilePath, renderMarkdownHtml } from '../public/js/markdown.js';
+import {
+  classifyHref,
+  computeAdaptiveInlineMermaidSize,
+  isCodeFilePath,
+  isPreviewableFilePath,
+  renderMarkdownHtml,
+} from '../public/js/markdown.js';
 import { execFileSync } from 'node:child_process';
 
 test('unquoteToolArg and normalizeToolArgs handle JSON-quoted and plain strings', () => {
@@ -577,6 +583,92 @@ test('Rich media previews (PDF, Video HTTP Range 206, Audio, CSV) and directory 
     const dirRevealJson = await dirReveal.json();
     assert.equal(dirRevealJson.isDirectory, true);
     assert.equal(dirRevealJson.folder, subFolderNoReadme);
+  } finally {
+    engine.close();
+    await new Promise((r) => server.close(r));
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('computeAdaptiveInlineMermaidSize fills horizontal space while guarding extreme aspect ratios', () => {
+  // Wide flowchart LR (1450x480) inside 792px column -> fills 100% of available width
+  const wide = computeAdaptiveInlineMermaidSize(1450, 480, 792, 900);
+  assert.equal(wide.width, 792);
+  assert.equal(wide.height, Math.round(480 * (792 / 1450)));
+
+  // Medium diagram (480x260) inside 792px Normal column & 1050px Wide column -> scales up to fill 100% width
+  const medNormal = computeAdaptiveInlineMermaidSize(480, 260, 792, 900);
+  assert.equal(medNormal.width, 792);
+  const medWide = computeAdaptiveInlineMermaidSize(480, 260, 1050, 900);
+  assert.equal(medWide.width, 1050);
+
+  // Tiny 2-node diagram (180x50) inside 1050px column -> capped at 2.6x so text stays balanced
+  const tiny = computeAdaptiveInlineMermaidSize(180, 50, 1050, 900);
+  assert.equal(tiny.width, Math.round(180 * 2.6));
+
+  // Very tall vertical flowchart (360x1000) -> upscaled moderately without 3-screen height explosion
+  const tall = computeAdaptiveInlineMermaidSize(360, 1000, 1050, 900);
+  assert.ok(tall.width >= 450 && tall.width < 1050);
+  assert.ok(tall.height <= 1250);
+});
+
+test('Pinned sessions API persists star order and folder-entries API lists directory contents safely', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'amp-pins-'));
+  const subDir = join(tmp, 'workspace-a');
+  mkdirSync(subDir, { recursive: true });
+  writeFileSync(join(subDir, 'notes.md'), '# Notes');
+  writeFileSync(join(subDir, 'solver.py'), 'print(1)');
+
+  const { server, port, engine } = await startStandaloneServer({
+    port: 0,
+    storePersistPath: join(tmp, 'docs-store.json'),
+    authPersistPath: join(tmp, 'auth-config.json'),
+  });
+
+  try {
+    // 1. Pin two sessions and verify LIFO top ordering & disk persistence
+    const pin1 = await (await fetch(`http://127.0.0.1:${port}/api/pinned-sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId: 'conv-alpha', pinned: true }),
+    })).json();
+    assert.deepEqual(pin1.pinnedIds, ['conv-alpha']);
+
+    const pin2 = await (await fetch(`http://127.0.0.1:${port}/api/pinned-sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId: 'conv-beta', pinned: true }),
+    })).json();
+    assert.deepEqual(pin2.pinnedIds, ['conv-beta', 'conv-alpha']);
+
+    // Verify GET /api/conversations includes pinnedIds
+    const convRes = await (await fetch(`http://127.0.0.1:${port}/api/conversations`)).json();
+    assert.deepEqual(convRes.pinnedIds, ['conv-beta', 'conv-alpha']);
+
+    // Unpin conv-alpha
+    const unpin = await (await fetch(`http://127.0.0.1:${port}/api/pinned-sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId: 'conv-alpha', pinned: false }),
+    })).json();
+    assert.deepEqual(unpin.pinnedIds, ['conv-beta']);
+    assert.equal(existsSync(join(tmp, 'pinned-sessions.json')), true);
+
+    // 2. Folder entries endpoint highlights target file and blocks restricted system paths
+    const folderRes = await fetch(
+      `http://127.0.0.1:${port}/api/folder-entries?path=${encodeURIComponent(join(subDir, 'solver.py'))}`
+    );
+    assert.equal(folderRes.status, 200);
+    const folderJson = await folderRes.json();
+    assert.equal(folderJson.folder, subDir);
+    const solverRow = folderJson.entries.find((e) => e.name === 'solver.py');
+    assert.ok(solverRow);
+    assert.equal(solverRow.isSelected, true);
+
+    const blockedFolder = await fetch(
+      `http://127.0.0.1:${port}/api/folder-entries?path=${encodeURIComponent('C:\\Windows\\System32')}`
+    );
+    assert.equal(blockedFolder.status, 403);
   } finally {
     engine.close();
     await new Promise((r) => server.close(r));

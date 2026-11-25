@@ -235,14 +235,12 @@ export function listConversations(flavor = 'antigravity-cli', limit = 1000) {
         if (!tPath) continue;
 
         seen.add(id);
-        let updatedAt = parseTimestampMs(r.last_modified_time) || parseTimestampMs(r.last_user_input_time);
-        if (!updatedAt) {
-          try {
-            updatedAt = statSync(tPath).mtimeMs;
-          } catch {
-            updatedAt = 0;
-          }
-        }
+        let fileMtimeMs = 0;
+        try {
+          fileMtimeMs = statSync(tPath).mtimeMs;
+        } catch {}
+        const dbTimeMs = parseTimestampMs(r.last_modified_time) || parseTimestampMs(r.last_user_input_time) || 0;
+        const updatedAt = Math.max(dbTimeMs, fileMtimeMs);
         const workspaceUri = parseWorkspaceUri(r.workspace_uris);
         const folderKey = normalizeFolderKey(workspaceUri);
         const parentId = (r.parent_conversation_id || '').trim();

@@ -462,23 +462,49 @@ async function revealOnWindowsExplorer(targetPath, isDirectory) {
 
 function readActiveTaskLogTail(convDir) {
   if (!convDir) return null;
+  const now = Date.now();
+  let newest = null;
+
   const tasksDir = join(convDir, '.system_generated', 'tasks');
-  if (!existsSync(tasksDir)) return null;
+  if (existsSync(tasksDir)) {
+    try {
+      for (const name of readdirSync(tasksDir)) {
+        if (!name.endsWith('.log')) continue;
+        const full = join(tasksDir, name);
+        try {
+          const st = statSync(full);
+          if (!st.isFile() || st.size === 0 || now - st.mtimeMs > 18000) continue;
+          if (!newest || st.mtimeMs > newest.mtimeMs) {
+            newest = { name, full, size: st.size, mtimeMs: st.mtimeMs };
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+
+  const stepsDir = join(convDir, '.system_generated', 'steps');
+  if (existsSync(stepsDir)) {
+    try {
+      const stepDirs = readdirSync(stepsDir)
+        .filter((d) => /^\d+$/.test(d))
+        .sort((a, b) => Number(b) - Number(a))
+        .slice(0, 4);
+      for (const sd of stepDirs) {
+        const outFile = join(stepsDir, sd, 'output.txt');
+        if (!existsSync(outFile)) continue;
+        try {
+          const st = statSync(outFile);
+          if (!st.isFile() || st.size === 0 || now - st.mtimeMs > 12000) continue;
+          if (!newest || st.mtimeMs > newest.mtimeMs) {
+            newest = { name: `step-${sd}/output.txt`, full: outFile, size: st.size, mtimeMs: st.mtimeMs };
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+
+  if (!newest) return null;
   try {
-    const now = Date.now();
-    let newest = null;
-    for (const name of readdirSync(tasksDir)) {
-      if (!name.endsWith('.log')) continue;
-      const full = join(tasksDir, name);
-      try {
-        const st = statSync(full);
-        if (!st.isFile() || st.size === 0 || now - st.mtimeMs > 20000) continue;
-        if (!newest || st.mtimeMs > newest.mtimeMs) {
-          newest = { name, full, size: st.size, mtimeMs: st.mtimeMs };
-        }
-      } catch {}
-    }
-    if (!newest) return null;
     const maxBytes = 3200;
     const readLen = Math.min(newest.size, maxBytes);
     const startOffset = newest.size - readLen;
@@ -574,6 +600,39 @@ export function createPreviewEngine({
   const sseClients = new Set();
   const watchers = new Map();
   const liveHookStates = new Map();
+  const liveConvRuntime = new Map(); // convId -> { stepCount, activeStatus, updatedAt }
+  const serverBootId = `${process.pid}-${Date.now()}`;
+
+  function isHookPhaseRunning(hs) {
+    if (!hs || !hs.phase) return false;
+    if (hs.phase === 'stopped' || hs.phase === 'idle' || hs.phase === 'started') return false;
+    const maxAge = (hs.phase === 'tool_done' || hs.phase === 'between_steps') ? 30000 : 75000;
+    if (Date.now() - (hs.updatedAt || 0) > maxAge) return false;
+    return hs.phase === 'thinking' || hs.phase === 'running_tool' || hs.phase === 'tool_done' || hs.phase === 'between_steps';
+  }
+
+  function enrichConversationsWithLiveState(convs) {
+    const now = Date.now();
+    const enriched = convs.map((c) => {
+      const hs = liveHookStates.get(c.id) || null;
+      const rt = liveConvRuntime.get(c.id) || null;
+      const hookActive = isHookPhaseRunning(hs);
+      const hookRecentlyStopped = Boolean(hs && hs.phase === 'stopped' && now - (hs.updatedAt || 0) < 15000);
+      const rtActive = Boolean(rt && rt.activeStatus === 'running' && now - (rt.updatedAt || 0) < 45000);
+      const active = hookActive || rtActive || (c.active && !hookRecentlyStopped);
+      const stepCount = Math.max(c.stepCount || 0, rt?.stepCount || 0);
+      const updatedAt = Math.max(c.updatedAt || 0, hs?.updatedAt || 0, rt?.updatedAt || 0);
+      return {
+        ...c,
+        active,
+        stepCount,
+        updatedAt,
+        hookState: hs && now - (hs.updatedAt || 0) < 90000 ? hs : null,
+      };
+    });
+    enriched.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    return enriched;
+  }
 
   function broadcastEvent(eventName, payload, filterFn = null) {
     const frame = `event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`;
@@ -706,12 +765,18 @@ export function createPreviewEngine({
 
         streamSnapshots.set(convId, { tPath, size: st.size, mtimeMs: st.mtimeMs, taskSig });
         const { view, updatedAt } = reader.read(tPath);
+        const mergedUpdatedAt = Math.max(updatedAt, taskTail?.updatedAt || 0);
+        liveConvRuntime.set(convId, {
+          stepCount: view?.summary?.totalSteps || 0,
+          activeStatus: view?.summary?.activeStatus || 'idle',
+          updatedAt: mergedUpdatedAt,
+        });
         broadcastEvent(
           'transcript',
           {
             conversationId: convId,
             flavor: resolved.flavor,
-            updatedAt: Math.max(updatedAt, taskTail?.updatedAt || 0),
+            updatedAt: mergedUpdatedAt,
             view,
             hookState,
             liveTaskLog: taskTail,
@@ -721,22 +786,29 @@ export function createPreviewEngine({
       } catch {}
     }
 
-    // Periodically check conversation_summaries.db mtime so sidebar session list & running dots stay live
-    if (streamTickCount % 7 === 0) {
+    // Check conversation_summaries.db + WAL + SHM every ~900ms so left sidebar session status stays live
+    if (streamTickCount % 5 === 0) {
       for (const flavor of detectFlavors()) {
         try {
-          const dbPath = join(getGeminiRoot(), flavor, 'conversation_summaries.db');
-          if (!existsSync(dbPath)) continue;
-          const mtime = statSync(dbPath).mtimeMs;
-          const prevDbMtime = dbMtimeSnapshots.get(flavor);
-          if (prevDbMtime !== undefined && mtime > prevDbMtime + 1) {
+          const dbBase = join(getGeminiRoot(), flavor, 'conversation_summaries.db');
+          if (!existsSync(dbBase)) continue;
+          const sigParts = [];
+          for (const f of [dbBase, `${dbBase}-wal`, `${dbBase}-shm`]) {
+            if (existsSync(f)) {
+              const fst = statSync(f);
+              sigParts.push(`${Math.round(fst.mtimeMs)}:${fst.size}`);
+            }
+          }
+          const nextDbSig = sigParts.join('|');
+          const prevDbSig = dbMtimeSnapshots.get(flavor);
+          if (prevDbSig !== undefined && nextDbSig !== prevDbSig) {
             broadcastEvent('conversations-updated', { flavor, updatedAt: Date.now() });
           }
-          dbMtimeSnapshots.set(flavor, mtime);
+          dbMtimeSnapshots.set(flavor, nextDbSig);
         } catch {}
       }
     }
-  }, 280);
+  }, 180);
   streamPoller.unref?.();
 
   async function handleRequest(req, res) {
@@ -837,7 +909,7 @@ export function createPreviewEngine({
       const limit = Math.min(2000, Math.max(10, Number(url.searchParams.get('limit')) || 1000));
       return sendJson(res, 200, {
         flavor,
-        conversations: listConversations(flavor, limit),
+        conversations: enrichConversationsWithLiveState(listConversations(flavor, limit)),
         pinnedIds: pinnedSessionIds,
       });
     }
@@ -1302,7 +1374,7 @@ export function createPreviewEngine({
           if (hookEventName === 'PreInvocation') phase = 'thinking';
           else if (hookEventName === 'PreToolUse') phase = 'running_tool';
           else if (hookEventName === 'PostToolUse') phase = 'tool_done';
-          else if (hookEventName === 'PostInvocation') phase = 'idle';
+          else if (hookEventName === 'PostInvocation') phase = 'between_steps';
           else if (hookEventName === 'Stop') phase = 'stopped';
           else if (hookEventName === 'SessionStart') phase = 'started';
 
@@ -1320,6 +1392,11 @@ export function createPreviewEngine({
           const tPath = payload.transcriptPath || (resolved ? resolveTranscriptPath(resolved.dir) : null);
           if (tPath && existsSync(tPath)) {
             const { view, updatedAt } = reader.read(tPath);
+            liveConvRuntime.set(convId, {
+              stepCount: view?.summary?.totalSteps || 0,
+              activeStatus: view?.summary?.activeStatus || 'idle',
+              updatedAt: Math.max(updatedAt, hookState.updatedAt),
+            });
             broadcastEvent(
               'transcript',
               { conversationId: convId, flavor: resolved?.flavor || 'antigravity-cli', updatedAt, view, hookState },
@@ -1358,7 +1435,7 @@ export function createPreviewEngine({
         'Cache-Control': 'no-cache, no-transform',
         Connection: 'keep-alive',
       });
-      res.write(`event: connected\ndata: ${JSON.stringify({ ok: true, convId, previewId })}\n\n`);
+      res.write(`event: connected\ndata: ${JSON.stringify({ ok: true, bootId: serverBootId, convId, previewId })}\n\n`);
 
       const client = { res, convId, previewId, flavorHint };
       sseClients.add(client);

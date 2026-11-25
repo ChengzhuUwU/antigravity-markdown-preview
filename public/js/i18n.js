@@ -28,6 +28,7 @@ const MESSAGES = {
     thinkingPhase: '💭 Thinking…',
     runningToolPhase: '⚙ {tool}…',
     toolDonePhase: '✓ {tool}',
+    sidebarRunningBadge: 'Running',
 
     // Topbar & Unified Preferences Menu (placed left of Sync)
     prefsBtn: 'Preferences',
@@ -265,6 +266,7 @@ const MESSAGES = {
     thinkingPhase: '💭 思考中…',
     runningToolPhase: '⚙ {tool}…',
     toolDonePhase: '✓ {tool}',
+    sidebarRunningBadge: '运行中',
 
     // Topbar & Unified Preferences Menu
     prefsBtn: '外观与偏好',

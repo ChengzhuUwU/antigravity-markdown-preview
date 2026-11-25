@@ -203,6 +203,7 @@ const state = {
   activeCliToolTab: null,
   authRequired: false,
   authenticated: true,
+  serverBootId: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -704,24 +705,76 @@ function resolveProjectLabel(c) {
   return 'Unassigned';
 }
 
+function isConvActivelyRunning(c) {
+  if (!c) return false;
+  if (isHookActivelyRunning(c.hookState)) return true;
+  if (c.hookState?.phase === 'stopped' && Date.now() - (c.hookState.updatedAt || 0) < 15000) return false;
+  return Boolean(c.active);
+}
+
+function formatSidebarLiveStatus(c) {
+  if (!isConvActivelyRunning(c)) return '';
+  const hs = c.hookState;
+  if (hs?.phase === 'thinking' || hs?.phase === 'between_steps') {
+    return t('thinkingPhase');
+  }
+  if (hs?.phase === 'running_tool' || hs?.phase === 'tool_done') {
+    return hs.toolName ? t('runningToolPhase', { tool: hs.toolName }) : t('sidebarRunningBadge');
+  }
+  return t('sidebarRunningBadge');
+}
+
+function patchConversationSidebarState(convId, { hookState, stepCount, activeStatus, updatedAt } = {}) {
+  if (!convId) return;
+  const idx = state.conversations.findIndex((c) => c.id === convId);
+  if (idx === -1) {
+    loadConversations();
+    return;
+  }
+  const cur = state.conversations[idx];
+  const nextHook = hookState !== undefined ? hookState : cur.hookState;
+  const hookRunning = isHookActivelyRunning(nextHook);
+  const hookStopped = nextHook?.phase === 'stopped';
+  const nextActive = hookRunning || activeStatus === 'running' || (cur.active && !hookStopped && activeStatus !== 'idle');
+  const nextSteps = stepCount != null ? Math.max(cur.stepCount || 0, stepCount) : cur.stepCount;
+  const nextUpdated = Math.max(cur.updatedAt || 0, updatedAt || 0, nextHook?.updatedAt || 0);
+
+  state.conversations[idx] = {
+    ...cur,
+    hookState: nextHook,
+    active: nextActive,
+    stepCount: nextSteps,
+    updatedAt: nextUpdated,
+  };
+  if (state.mode === 'sessions') {
+    renderSidebarList();
+  }
+}
+
 function renderSessionButtonHtml(c, { showProjectPill = false } = {}) {
   const active = c.id === state.activeConvId ? 'active' : '';
   const sub = c.isSubagent ? 'is-subagent' : '';
-  const dotClass = c.active ? 'running' : '';
+  const runningNow = isConvActivelyRunning(c);
+  const dotClass = runningNow ? 'running' : '';
+  const runningItemCls = runningNow ? 'is-running-session' : '';
   const timeStr = formatCompactDate(c.updatedAt);
   const isPinned = state.pinnedIds.includes(c.id);
   const starTip = isPinned ? t('unpinSessionTip') : t('pinSessionTip');
+  const liveLabel = formatSidebarLiveStatus(c);
+  const liveBadgeHtml = liveLabel
+    ? `<span class="session-live-status-pill">${escapeHtml(liveLabel)}</span>`
+    : '';
   const projBadge = showProjectPill
     ? `<span class="session-project-pill">${escapeHtml(resolveProjectLabel(c))}</span>`
     : `<span>${escapeHtml(c.id.slice(0, 8))}${c.stepCount ? ` · ${c.stepCount} ${escapeHtml(t('stepsStat'))}` : ''}</span>`;
-  return `<button type="button" class="session-item ${active} ${sub}" data-conv-id="${escapeHtml(c.id)}" title="${escapeHtml(c.title)}">
+  return `<button type="button" class="session-item ${active} ${sub} ${runningItemCls}" data-conv-id="${escapeHtml(c.id)}" title="${escapeHtml(c.title)}">
     <div class="session-title-line">
       <span class="status-dot ${dotClass}"></span>
       <span class="session-title-text">${escapeHtml(c.title)}</span>
       <span class="session-star-action ${isPinned ? 'pinned' : ''}" data-pin-conv="${escapeHtml(c.id)}" title="${escapeHtml(starTip)}">${isPinned ? '★' : '☆'}</span>
     </div>
     <div class="session-meta-line">
-      ${projBadge}
+      <span class="session-meta-left">${liveBadgeHtml}${projBadge}</span>
       <span>${escapeHtml(timeStr)}</span>
     </div>
   </button>`;
@@ -956,12 +1009,15 @@ function renderSidebarList() {
 
     const displayCount = rootAll.length || grp.items.length;
     const folderTooltip = grp.workspaceUri ? `${grp.label} (${grp.workspaceUri})` : grp.label;
+    const groupHasRunning = grp.items.some(isConvActivelyRunning);
+    const groupRunningDot = groupHasRunning ? `<span class="status-dot running" title="${escapeHtml(t('sidebarRunningBadge'))}"></span>` : '';
 
     return `<div class="project-folder" data-project-key="${escapeHtml(grp.key)}" data-open="${isOpen}">
       <button type="button" class="project-folder-header" data-toggle-project="${escapeHtml(grp.key)}" title="${escapeHtml(folderTooltip)}">
         <span class="project-folder-left">
           ${CHEVRON_SVG}
           <span class="project-folder-name">${escapeHtml(grp.label)}</span>
+          ${groupRunningDot}
         </span>
         <span class="project-folder-meta">
           <span>${escapeHtml(formatCompactDate(grp.latestUpdatedAt))}</span>
@@ -981,13 +1037,22 @@ function renderSidebarList() {
   if (collapseBtn) {
     collapseBtn.textContent = anyOpen ? t('collapseProjectsBtn') : t('expandProjectsBtn');
   }
+  const prevSidebarScroll = container.scrollTop;
   container.innerHTML = pinnedSectionHtml + projectsHtml;
+  container.scrollTop = prevSidebarScroll;
 }
 
 function isHookActivelyRunning(hookState) {
   if (!hookState || !hookState.phase) return false;
-  if (Date.now() - (hookState.updatedAt || 0) > 60000) return false;
-  return hookState.phase === 'thinking' || hookState.phase === 'running_tool';
+  if (hookState.phase === 'stopped' || hookState.phase === 'idle' || hookState.phase === 'started') return false;
+  const maxAge = (hookState.phase === 'tool_done' || hookState.phase === 'between_steps') ? 30000 : 75000;
+  if (Date.now() - (hookState.updatedAt || 0) > maxAge) return false;
+  return (
+    hookState.phase === 'thinking' ||
+    hookState.phase === 'running_tool' ||
+    hookState.phase === 'tool_done' ||
+    hookState.phase === 'between_steps'
+  );
 }
 
 function connectSSE({ convId = '', previewId = '' } = {}) {
@@ -1003,8 +1068,19 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
   const es = new EventSource(`/api/events?${qs.toString()}`);
   state.eventSource = es;
 
-  es.addEventListener('connected', () => {
+  es.addEventListener('connected', (ev) => {
     setLiveBadge(t('liveSync'), 'live');
+    try {
+      const info = JSON.parse(ev.data || '{}');
+      if (info.bootId) {
+        if (state.serverBootId && state.serverBootId !== info.bootId) {
+          // Server was restarted with updated code -> reload SPA modules automatically (especially helpful in --app window!)
+          window.location.reload();
+          return;
+        }
+        state.serverBootId = info.bootId;
+      }
+    } catch {}
   });
 
   es.addEventListener('auth', async () => {
@@ -1018,6 +1094,14 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
   es.addEventListener('transcript', (ev) => {
     try {
       const data = JSON.parse(ev.data);
+      if (data.conversationId) {
+        patchConversationSidebarState(data.conversationId, {
+          hookState: data.hookState,
+          stepCount: data.view?.summary?.totalSteps,
+          activeStatus: data.view?.summary?.activeStatus,
+          updatedAt: data.updatedAt,
+        });
+      }
       if (data.conversationId && data.conversationId === state.activeConvId && state.mode === 'sessions') {
         state.currentViewData = { ...state.currentViewData, ...data };
         applyHookPhase(data.hookState);
@@ -1025,6 +1109,7 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
         const nearBottom = scrollEl ? (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 160) : false;
         transcriptRenderer.render(data.conversationId, data.view, {
           isRunning: isHookActivelyRunning(data.hookState),
+          isLiveUpdate: true,
           hookState: data.hookState || null,
           liveTaskLog: data.liveTaskLog || null,
           baseDir: state.currentBaseDir,
@@ -1070,6 +1155,12 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
   es.addEventListener('hook', (ev) => {
     try {
       const data = JSON.parse(ev.data);
+      if (data.conversationId) {
+        patchConversationSidebarState(data.conversationId, {
+          hookState: data.hookState,
+          updatedAt: data.hookState?.updatedAt || Date.now(),
+        });
+      }
       if (data.conversationId === state.activeConvId) {
         if (state.currentViewData) state.currentViewData.hookState = data.hookState;
         applyHookPhase(data.hookState);
@@ -1078,6 +1169,7 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
           const nearBottom = scrollEl ? (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 160) : false;
           transcriptRenderer.render(state.activeConvId, state.currentViewData.view, {
             isRunning: isHookActivelyRunning(data.hookState),
+            isLiveUpdate: true,
             hookState: data.hookState || null,
             liveTaskLog: state.currentViewData.liveTaskLog || null,
             baseDir: state.currentBaseDir,
@@ -2396,6 +2488,13 @@ async function bootstrap() {
       }
     },
     onTocChanged: renderToc,
+    onStreamTick: () => {
+      if (!state.autoFollow) return;
+      const sc = el('reader-scroll');
+      if (sc && sc.scrollHeight - sc.scrollTop - sc.clientHeight < 220) {
+        sc.scrollTop = sc.scrollHeight;
+      }
+    },
   });
 
   const mdCallbacks = {

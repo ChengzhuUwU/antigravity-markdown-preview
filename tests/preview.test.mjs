@@ -742,3 +742,43 @@ test('buildNormalizedView extracts live update_steps checklist and marks in-flig
   assert.equal(viewNext.turns[0].planSteps.activeTitle, 'Pack & push tag');
 });
 
+test('Live hook events enrich /api/conversations active status and hookState in real time', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'amp-live-conv-'));
+  const { server, port, engine } = await startStandaloneServer({
+    port: 0,
+    storePersistPath: join(tmp, 'docs-store.json'),
+    authPersistPath: join(tmp, 'auth-config.json'),
+  });
+
+  try {
+    const initial = await (await fetch(`http://127.0.0.1:${port}/api/conversations`)).json();
+    if (initial.conversations.length > 0) {
+      const targetId = initial.conversations[0].id;
+      await fetch(`http://127.0.0.1:${port}/api/hook-event`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: targetId, hookEventName: 'PreToolUse', toolCall: { name: 'run_command' } }),
+      });
+
+      const during = await (await fetch(`http://127.0.0.1:${port}/api/conversations`)).json();
+      const activeItem = during.conversations.find((c) => c.id === targetId);
+      assert.equal(activeItem.active, true);
+      assert.equal(activeItem.hookState?.phase, 'running_tool');
+      assert.equal(activeItem.hookState?.toolName, 'run_command');
+
+      await fetch(`http://127.0.0.1:${port}/api/hook-event`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId: targetId, hookEventName: 'Stop' }),
+      });
+
+      const afterStop = await (await fetch(`http://127.0.0.1:${port}/api/conversations`)).json();
+      const stoppedItem = afterStop.conversations.find((c) => c.id === targetId);
+      assert.equal(stoppedItem.hookState?.phase, 'stopped');
+    }
+  } finally {
+    engine.close();
+    await new Promise((r) => server.close(r));
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

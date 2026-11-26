@@ -2,6 +2,23 @@
 
 All notable changes to **Antigravity Session Preview (`agy-session-preview`)** will be documented in this file.
 
+## [0.4.1] - 2026-11-26
+
+### Added
+- **Interactive User Decision Prompts (`ask_question` & `exit_plan_mode`)**:
+  - Detects pending user decisions (`activeStatus: 'waiting_decision'`) instead of leaving sessions in a generic `Thinking…` / `Working…` state.
+  - Renders structured inline **Decision Required / Plan Review Required** cards (single-choice & multi-select badges, `(Recommended)` highlights, proposed plan Markdown preview, and answered option summaries with decision wait duration), keeps accompanying lead-in Markdown visible outside `Execution process`, and surfaces **`⏳ Awaiting Decision` (`⏳ 等待你的决策`)** across topbar, sidebar session/folder rows, and jump/switch toast alerts.
+- **Explicit `--focus` Flag & Responsive Left-Sidebar Collapse Button**:
+  - Added `agy-preview --focus` (`force: true`) to switch an already-open Preview window on explicit user command while converting background CLI/hook notifications (`force: false`) into a non-intrusive switch prompt toast.
+  - Replaced the static `S` badge in the left sidebar header with `#sidebar-collapse-btn`, paired at the exact same top-left coordinates with `#sidebar-toggle-btn` when collapsed so narrow windows (`<= 860px`) never hide the sidebar toggle.
+
+### Fixed
+- **Interrupted / Canceled Turn State & Execution Copy**:
+  - Combined Hook `Stop` (`terminationReason: "USER_CANCELED"`) and SQLite `conversation_summaries.db` run-state checks (`getConversationRunState`) with `TranscriptReader` cache invalidation so turns interrupted via `Esc` / `Ctrl+C` (which do not append a new JSONL line) immediately stop spinning, mark unexecuted queued tool calls as `interrupted` (`已中断`), and display a clear interrupted notice when no final response was generated.
+  - Preserved real-time live command output tailing (`6400`-byte window, `Live Command Output` / `实时命令输出`) while replacing conflicting "Streaming live / 实时流式传输中" labels with accurate tool/execution status indicators.
+- **Session & Document Navigation Stability**:
+  - Isolated SSE `hook` events to `sessions` mode so active `Docs / Clips` views are never overwritten by background session hooks, persisted per-tab navigation targets (`sessionStorage` + `amp-last-conv` + Sidecar reload preservation), guarded async view/preview fetches with request sequence counters, froze sidebar DOM re-renders while hovered/clicked, and updated `agy-preview --restart` to reload existing clients in-place without spawning duplicate `--app` windows.
+
 ## [0.4.0] - 2026-11-26
 
 ### Added

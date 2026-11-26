@@ -32,6 +32,7 @@ Options:
       --flavor <name>          Antigravity flavor (default: antigravity-cli)
       --stdin                  Read Markdown, CLI text, or stream-json from stdin
       --open                   Open or focus preview window (enabled by default)
+      --focus                  Force-switch existing preview window immediately without prompt
       --no-open                Start/sync server without opening a window
       --new-window             Always open a new standalone app window
       --foreground             Keep server in foreground (used by daemon mode)
@@ -57,6 +58,9 @@ function parseArgs(argv) {
     mode: 'auto',
     host: '',
     open: true,
+    explicitOpen: false,
+    explicitTarget: false,
+    focus: false,
     newWindow: false,
     foreground: false,
     restart: false,
@@ -92,22 +96,34 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--help' || a === '-h') opts.help = true;
-    else if (a === '--conv' || a === '-c') opts.conv = argv[++i] || '';
-    else if (a === '--flavor') opts.flavor = argv[++i] || 'antigravity-cli';
-    else if (a === '--file' || a === '-f') opts.file = argv[++i] || '';
-    else if (a === '--title' || a === '-t') opts.title = argv[++i] || '';
+    else if (a === '--conv' || a === '-c') {
+      opts.conv = argv[++i] || '';
+      opts.explicitTarget = true;
+    } else if (a === '--flavor') opts.flavor = argv[++i] || 'antigravity-cli';
+    else if (a === '--file' || a === '-f') {
+      opts.file = argv[++i] || '';
+      opts.explicitTarget = true;
+    } else if (a === '--title' || a === '-t') opts.title = argv[++i] || '';
     else if (a === '--mode' || a === '-m') opts.mode = argv[++i] || 'auto';
     else if (a === '--port' || a === '-p') opts.port = Number(argv[++i]) || 0;
     else if (a === '--host') opts.host = argv[++i] || '';
-    else if (a === '--open') opts.open = true;
-    else if (a === '--no-open') opts.open = false;
+    else if (a === '--open') {
+      opts.open = true;
+      opts.explicitOpen = true;
+    } else if (a === '--focus') {
+      opts.open = true;
+      opts.explicitOpen = true;
+      opts.focus = true;
+    } else if (a === '--no-open') opts.open = false;
     else if (a === '--new-window') opts.newWindow = true;
     else if (a === '--foreground') opts.foreground = true;
     else if (a === '--restart') opts.restart = true;
     else if (a === '--stop') opts.stop = true;
     else if (a === '--status') opts.status = true;
-    else if (a === '--stdin') opts.stdin = true;
-    else if (a === '--set-password') {
+    else if (a === '--stdin') {
+      opts.stdin = true;
+      opts.explicitTarget = true;
+    } else if (a === '--set-password') {
       opts.passwordCmd = 'set';
       opts.passwordVal = argv[++i] || '';
     } else if (a === '--cancel-password' || a === '--clear-password' || a === '--unset-password') {
@@ -123,6 +139,7 @@ function parseArgs(argv) {
       opts.passwordCmd = 'print';
     } else if (!a.startsWith('-') && !opts.file) {
       opts.file = a;
+      opts.explicitTarget = true;
     }
   }
   return opts;
@@ -454,8 +471,23 @@ async function main() {
 
   const cliToken = authManager.getCliToken();
   const serverInfo = await ensureServerRunning(opts.port, opts.foreground, opts.host);
+
+  // `--restart` without explicit `--open` or target restarts the daemon in place without opening/hijacking windows
+  if (opts.restart && !opts.explicitOpen && !opts.explicitTarget) {
+    const authStatus = authManager.getStatus();
+    console.log(JSON.stringify({
+      ok: true,
+      restarted: true,
+      host: serverInfo.host || '127.0.0.1',
+      port: serverInfo.port,
+      pid: serverInfo.pid,
+      authRequired: authStatus.authRequired,
+    }));
+    return;
+  }
+
   let targetUrl = `http://127.0.0.1:${serverInfo.port}/`;
-  const focusPayload = {};
+  const focusPayload = { force: Boolean(opts.focus) };
 
   if (opts.file) {
     const absFile = resolve(opts.file);
@@ -469,6 +501,7 @@ async function main() {
     }
     targetUrl += `?preview=${encodeURIComponent(created.data.id)}`;
     focusPayload.previewId = created.data.id;
+    focusPayload.title = created.data.title || '';
   } else if (opts.stdin || (!process.stdin.isTTY && !opts.conv)) {
     // Progressive live streaming from stdin into Preview UI via SSE
     const streamId = `stdin-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -501,8 +534,12 @@ async function main() {
             windowOpened = true;
             const streamUrl = `http://127.0.0.1:${serverInfo.port}/?preview=${encodeURIComponent(createdEntry.id)}`;
             if (!opts.newWindow && serverInfo.clients > 0) {
-              await httpJson(serverInfo.port, '/api/focus', 'POST', { previewId: createdEntry.id }, 1500, cliToken).catch(() => {});
-              windowResultStream = { mode: 'focused-existing-window', clients: serverInfo.clients };
+              await httpJson(serverInfo.port, '/api/focus', 'POST', {
+                previewId: createdEntry.id,
+                title: createdEntry.title || streamTitle,
+                force: Boolean(opts.focus),
+              }, 1500, cliToken).catch(() => {});
+              windowResultStream = { mode: opts.focus ? 'focused-existing-window' : 'notified-existing-window', clients: serverInfo.clients };
             } else if (serverInfo.reused) {
               const resp = await httpJson(serverInfo.port, '/api/focus', 'POST', { openWindow: true, url: streamUrl }, 1500, cliToken).catch(() => null);
               windowResultStream = resp?.data?.window || launchStandaloneWindow(streamUrl);
@@ -567,7 +604,7 @@ async function main() {
   if (opts.open) {
     if (!opts.newWindow && serverInfo.clients > 0 && (focusPayload.conversationId || focusPayload.previewId)) {
       await httpJson(serverInfo.port, '/api/focus', 'POST', focusPayload, 1500, cliToken).catch(() => {});
-      windowResult = { mode: 'focused-existing-window', clients: serverInfo.clients };
+      windowResult = { mode: opts.focus ? 'focused-existing-window' : 'notified-existing-window', clients: serverInfo.clients };
     } else if (serverInfo.reused) {
       const resp = await httpJson(serverInfo.port, '/api/focus', 'POST', { openWindow: true, url: targetUrl }, 1500, cliToken).catch(() => null);
       windowResult = resp?.data?.window || launchStandaloneWindow(targetUrl);

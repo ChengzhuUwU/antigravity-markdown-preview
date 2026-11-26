@@ -890,3 +890,330 @@ test('Office suite (.docx, .xlsx, .pptx) & custom PDF.js vendor bundles work end
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test('Focus SSE endpoint resolves titles and distinguishes non-intrusive prompt (force: false) vs explicit --focus (force: true)', async () => {
+  const tmp = mkdtempSync(join(tmpdir(), 'amp-focus-'));
+  const { server, port, engine } = await startStandaloneServer({
+    port: 0,
+    storePersistPath: join(tmp, 'docs-store.json'),
+    authPersistPath: join(tmp, 'auth-config.json'),
+  });
+
+  try {
+    // 1. CLI --help exposes --focus flag and bilingual i18n keys exist
+    const cliHelp = execFileSync(process.execPath, [join(process.cwd(), 'bin', 'agy-preview.mjs'), '--help'], {
+      encoding: 'utf-8',
+    });
+    assert.match(cliHelp, /--focus\b/);
+    assert.match(cliHelp, /--restart\b/);
+
+    const { setLang, t } = await import('../public/js/i18n.js');
+    setLang('en');
+    assert.match(t('focusPromptDoc', { title: 'Spec.md' }), /Spec\.md/);
+    assert.equal(t('focusSwitchBtn'), 'Switch');
+    setLang('zh');
+    assert.match(t('focusPromptSession', { title: '调试任务' }), /调试任务/);
+    assert.equal(t('focusSwitchBtn'), '切换查看');
+    setLang('en');
+
+    // 2. Create a custom preview doc and verify SSE focus event resolves title & force flag
+    const createdDoc = await (await fetch(`http://127.0.0.1:${port}/api/previews`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Architecture Notes', content: '# Arch' }),
+    })).json();
+
+    const receivedFocusEvents = [];
+    await new Promise((resolveSse, rejectSse) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          rejectSse(new Error('SSE focus event timeout'));
+        }
+      }, 3000);
+
+      const sseReq = httpGet(`http://127.0.0.1:${port}/api/events?preview=${encodeURIComponent(createdDoc.id)}`, (res) => {
+        let buf = '';
+        res.on('error', () => {});
+        res.on('data', async (chunk) => {
+          if (settled) return;
+          buf += chunk.toString('utf-8');
+          if (buf.includes('event: connected') && !buf.includes('__focus_triggered__')) {
+            buf += '__focus_triggered__';
+            await fetch(`http://127.0.0.1:${port}/api/focus`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ previewId: createdDoc.id }),
+            });
+            await fetch(`http://127.0.0.1:${port}/api/focus`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ conversationId: 'abcdef12-3456-7890', force: true }),
+            });
+          }
+          const matches = [...buf.matchAll(/event: focus\ndata: ([^\n]+)\n/g)];
+          if (matches.length >= 2) {
+            for (const m of matches) {
+              receivedFocusEvents.push(JSON.parse(m[1]));
+            }
+            settled = true;
+            clearTimeout(timer);
+            res.destroy();
+            sseReq.destroy();
+            resolveSse();
+          }
+        });
+      });
+      sseReq.on('error', (e) => {
+        if (!settled && e.code !== 'ECONNRESET') {
+          settled = true;
+          clearTimeout(timer);
+          rejectSse(e);
+        }
+      });
+    });
+
+    assert.equal(receivedFocusEvents.length, 2);
+    assert.equal(receivedFocusEvents[0].previewId, createdDoc.id);
+    assert.equal(receivedFocusEvents[0].title, 'Architecture Notes');
+    assert.equal(receivedFocusEvents[0].force, false);
+
+    assert.equal(receivedFocusEvents[1].conversationId, 'abcdef12-3456-7890');
+    assert.match(receivedFocusEvents[1].title, /abcdef12/);
+    assert.equal(receivedFocusEvents[1].force, true);
+  } finally {
+    engine.close();
+    await new Promise((r) => server.close(r));
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test('buildNormalizedView surfaces ask_question and exit_plan_mode as waiting_decision while pending and parses multi-question answers when resolved', async () => {
+  const steps = [
+    {
+      step_index: 0,
+      source: 'USER_EXPLICIT',
+      type: 'USER_INPUT',
+      status: 'DONE',
+      created_at: '2026-11-26T02:50:00Z',
+      content: 'Provision GPU and launch fine-tuning',
+    },
+    {
+      step_index: 1,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: '2026-11-26T02:52:32Z',
+      thinking: 'A100 returned 503; asking user which GPU and task subset to run.',
+      content: 'A100 is temporarily out of stock in the current region. Please choose a fallback GPU:',
+      tool_calls: [
+        {
+          name: 'ask_question',
+          args: {
+            questions: [
+              {
+                question: 'How would you like to switch GPUs?',
+                options: [
+                  '(Recommended) Request single H100 (80GB HBM3)',
+                  'Request single G4 (96GB GDDR7)',
+                ],
+                is_multi_select: false,
+              },
+              {
+                question: 'Confirm the training task scope:',
+                options: [
+                  '(Recommended) RoboTwin 2.0 3 tasks',
+                  'LIBERO + RoboTwin 2 tasks',
+                ],
+                is_multi_select: false,
+              },
+            ],
+          },
+        },
+      ],
+    },
+  ];
+
+  // 1. While waiting for user response: must be waiting_decision (never stuck as generic running!)
+  const waitingView = buildNormalizedView(steps);
+  assert.equal(waitingView.summary.activeStatus, 'waiting_decision');
+  assert.ok(waitingView.summary.pendingDecision);
+  assert.equal(waitingView.summary.pendingDecision.decisionType, 'ask_question');
+  assert.equal(waitingView.summary.pendingDecision.questionCount, 2);
+  assert.match(waitingView.summary.pendingDecision.title, /switch GPUs/);
+
+  const turnWaiting = waitingView.turns[0];
+  const leadMd = turnWaiting.items.find((it) => it.kind === 'markdown');
+  assert.equal(leadMd.intermediate, false, 'Markdown paired with ask_question must remain visible outside Execution process');
+
+  const decWaiting = turnWaiting.items.find((it) => it.kind === 'decision');
+  assert.ok(decWaiting);
+  assert.equal(decWaiting.status, 'waiting');
+  assert.equal(decWaiting.questions.length, 2);
+
+  // 2. User submits answers (GENERIC step) and agent continues with another tool call in the same turn
+  steps.push({
+    step_index: 2,
+    source: 'MODEL',
+    type: 'GENERIC',
+    status: 'DONE',
+    created_at: '2026-11-26T02:52:51Z',
+    content: 'Created At: 2026-11-26T10:52:51+08:00\nCompleted At: 2026-11-26T10:55:22+08:00\nA1: (Recommended) Request single H100 (80GB HBM3)\nA2: LIBERO + RoboTwin 2 tasks',
+  });
+
+  const answeredView = buildNormalizedView(steps);
+  assert.equal(answeredView.summary.activeStatus, 'idle');
+  assert.equal(answeredView.summary.pendingDecision, null);
+  const decAnswered = answeredView.turns[0].items.find((it) => it.kind === 'decision');
+  assert.equal(decAnswered.status, 'answered');
+  assert.equal(decAnswered.durationMs, 151000);
+  assert.equal(decAnswered.answers[1], '(Recommended) Request single H100 (80GB HBM3)');
+  assert.equal(decAnswered.answers[2], 'LIBERO + RoboTwin 2 tasks');
+
+  // 3. Even if further tool calls run later in the same turn, leadMd before ask_question stays visible
+  steps.push({
+    step_index: 3,
+    source: 'MODEL',
+    type: 'PLANNER_RESPONSE',
+    status: 'DONE',
+    created_at: '2026-11-26T02:55:23Z',
+    tool_calls: [{ name: 'exit_plan_mode', args: { plan: '# Rollout Plan\n\n- Step A\n- Step B' } }],
+  });
+
+  const planWaitingView = buildNormalizedView(steps);
+  assert.equal(planWaitingView.summary.activeStatus, 'waiting_decision');
+  assert.equal(planWaitingView.summary.pendingDecision.decisionType, 'approve_plan');
+  assert.equal(planWaitingView.summary.pendingDecision.title, 'Rollout Plan');
+  assert.equal(planWaitingView.turns[0].items.find((it) => it.kind === 'markdown').intermediate, false);
+
+  const { setLang, t } = await import('../public/js/i18n.js');
+  setLang('zh');
+  assert.match(t('waitingDecisionPhase'), /等待/);
+  assert.match(t('decisionRequiredTitle'), /决策/);
+  setLang('en');
+});
+
+test('Interrupted turns mark unexecuted queued tools as canceled, invalidate TranscriptReader cache on stop, and use non-streaming execution copy', async () => {
+  const { TranscriptReader } = await import('../server/transcript.mjs');
+  const { setLang, t } = await import('../public/js/i18n.js');
+
+  // 1. Verify bilingual execution & live command output labels avoid conflicting "streaming / 流式" terminology
+  setLang('en');
+  assert.doesNotMatch(t('streamingBadge'), /stream/i);
+  assert.doesNotMatch(t('liveTaskOutputLabel'), /stream/i);
+  assert.match(t('interruptedPrefix'), /interrupted/i);
+  assert.match(t('turnInterruptedNotice'), /interrupted/i);
+  assert.match(t('collapseSidebarTip'), /Collapse Sidebar/);
+  assert.match(t('expandSidebarTip'), /Expand Sidebar/);
+
+  setLang('zh');
+  assert.doesNotMatch(t('streamingBadge'), /流式/);
+  assert.doesNotMatch(t('liveTaskOutputLabel'), /流式/);
+  assert.match(t('interruptedPrefix'), /中断/);
+  assert.match(t('canceledPill'), /中断/);
+  assert.match(t('turnInterruptedNotice'), /中断/);
+  assert.match(t('collapseSidebarTip'), /收起侧边/);
+  assert.match(t('expandSidebarTip'), /展开侧边/);
+  setLang('en');
+
+  // Verify left-sidebar collapse button replaces static "S" badge and pairs with topbar expand button
+  const indexHtml = readFileSync(join(process.cwd(), 'public', 'index.html'), 'utf-8');
+  assert.match(indexHtml, /id="sidebar-collapse-btn"/);
+  assert.match(indexHtml, /id="sidebar-toggle-btn"/);
+  assert.doesNotMatch(indexHtml, /<span class="brand-dot">S<\/span>/);
+  const stylesCss = readFileSync(join(process.cwd(), 'public', 'styles.css'), 'utf-8');
+  assert.match(stylesCss, /\.sidebar:not\(\.collapsed\)\s*~\s*\.main-workspace\s+#sidebar-toggle-btn/);
+
+  // 2. Simulate a multi-tool batch interrupted after 3 of 5 tools complete (mirrors Google AI Ultra Colab Guide)
+  const steps = [
+    {
+      step_index: 0,
+      source: 'USER_EXPLICIT',
+      type: 'USER_INPUT',
+      status: 'DONE',
+      created_at: '2026-11-26T02:32:00Z',
+      content: 'Check remote Colab GPU quota and plan fine-tuning',
+    },
+    {
+      step_index: 1,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: '2026-11-26T02:33:06Z',
+      thinking: 'Checking Colab config and searching docs.',
+      content: '',
+      tool_calls: [
+        { name: 'read_file', args: { Path: 'colab.json' } },
+        { name: 'read_file', args: { Path: 'train.py' } },
+        { name: 'run_command', args: { CommandLine: 'colab status', toolSummary: 'Check Colab status' } },
+        { name: 'search_web', args: { query: 'LIBERO fine-tuning' } },
+        { name: 'search_web', args: { query: 'RoboTwin 2.0 tasks' } },
+      ],
+    },
+    { step_index: 2, source: 'MODEL', type: 'GENERIC', status: 'DONE', content: '{"tier":"ultra"}' },
+    { step_index: 3, source: 'MODEL', type: 'GENERIC', status: 'DONE', content: 'def main(): pass' },
+    { step_index: 4, source: 'MODEL', type: 'GENERIC', status: 'DONE', content: 'Connected: A100' },
+  ];
+
+  // While live, unconsumed tools are running
+  const liveView = buildNormalizedView(steps, { sessionStopped: false });
+  assert.equal(liveView.summary.activeStatus, 'running');
+  assert.equal(Boolean(liveView.turns[0].interrupted), false);
+  const liveTools = liveView.turns[0].items.find((it) => it.kind === 'tool_group').tools;
+  assert.deepEqual(liveTools.map((tl) => tl.status), ['done', 'done', 'done', 'running', 'running']);
+
+  // Once session stops / user cancels, unexecuted tools flip to canceled and turn is marked interrupted
+  const stoppedView = buildNormalizedView(steps, { sessionStopped: true, userCanceled: true });
+  assert.equal(stoppedView.summary.activeStatus, 'canceled');
+  assert.equal(stoppedView.summary.pendingDecision, null);
+  assert.equal(stoppedView.turns[0].interrupted, true);
+  const stoppedTools = stoppedView.turns[0].items.find((it) => it.kind === 'tool_group').tools;
+  assert.deepEqual(stoppedTools.map((tl) => tl.status), ['done', 'done', 'done', 'canceled', 'canceled']);
+
+  // 3. TranscriptReader must recompute cached view when sessionStopped flips even though file size/mtime did not change
+  const tmp = mkdtempSync(join(tmpdir(), 'amp-canceled-'));
+  try {
+    const tPath = join(tmp, 'transcript_full.jsonl');
+    writeFileSync(tPath, `${steps.map((s) => JSON.stringify(s)).join('\n')}\n`, 'utf-8');
+    const reader = new TranscriptReader();
+
+    const firstRead = reader.read(tPath, { sessionStopped: false });
+    assert.equal(firstRead.view.summary.activeStatus, 'running');
+
+    const secondRead = reader.read(tPath, { sessionStopped: true, userCanceled: true });
+    assert.equal(secondRead.view.summary.activeStatus, 'canceled');
+    assert.equal(secondRead.view.turns[0].interrupted, true);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+
+  // 4. If user starts a follow-up turn after an interrupted turn, Turn #1 stays marked interrupted/canceled
+  const continuedSteps = [
+    ...steps,
+    {
+      step_index: 5,
+      source: 'USER_EXPLICIT',
+      type: 'USER_INPUT',
+      status: 'DONE',
+      created_at: '2026-11-26T02:35:00Z',
+      content: 'Switch to 2 tasks only',
+    },
+    {
+      step_index: 6,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: '2026-11-26T02:35:10Z',
+      content: 'Here is the updated 2-task plan.',
+    },
+  ];
+  const continuedView = buildNormalizedView(continuedSteps, { sessionStopped: true });
+  assert.equal(continuedView.summary.activeStatus, 'idle');
+  assert.equal(continuedView.turns[0].interrupted, true);
+  assert.deepEqual(
+    continuedView.turns[0].items.find((it) => it.kind === 'tool_group').tools.map((tl) => tl.status),
+    ['done', 'done', 'done', 'canceled', 'canceled']
+  );
+  assert.equal(Boolean(continuedView.turns[1].interrupted), false);
+});

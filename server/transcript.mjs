@@ -187,6 +187,36 @@ function extractFallbackSummary(convDir, id) {
   return `Conversation ${id.slice(0, 8)}`;
 }
 
+export function getConversationRunState(convId, flavor = 'antigravity-cli') {
+  if (!convId || typeof convId !== 'string' || !SAFE_ID_RE.test(convId)) {
+    return { found: false, active: false, status: '' };
+  }
+  const safeFlavor = ALLOWED_FLAVORS.includes(flavor) ? flavor : 'antigravity-cli';
+  const dbPath = join(getGeminiRoot(), safeFlavor, 'conversation_summaries.db');
+  if (!existsSync(dbPath)) {
+    return { found: false, active: false, status: '' };
+  }
+  let db;
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true });
+    const row = db.prepare(`
+      SELECT status, not_fully_idle
+      FROM conversation_summaries
+      WHERE conversation_id = ?
+    `).get(convId);
+    if (!row) return { found: false, active: false, status: '' };
+    const status = String(row.status || '');
+    const active = Boolean(row.not_fully_idle) || status === 'CASCADE_RUN_STATUS_RUNNING';
+    return { found: true, active, status };
+  } catch {
+    return { found: false, active: false, status: '' };
+  } finally {
+    if (db) {
+      try { db.close(); } catch {}
+    }
+  }
+}
+
 export function listConversations(flavor = 'antigravity-cli', limit = 1000) {
   const safeFlavor = ALLOWED_FLAVORS.includes(flavor) ? flavor : 'antigravity-cli';
   const brainRoot = getBrainRoot(safeFlavor);
@@ -264,6 +294,9 @@ export function listConversations(flavor = 'antigravity-cli', limit = 1000) {
           projectName = basename(cleanedWs) || cleanedWs;
         }
 
+        const active = Boolean(r.not_fully_idle) || r.status === 'CASCADE_RUN_STATUS_RUNNING';
+        const waitingDecision = active ? inspectTailPendingDecision(tPath) : null;
+
         items.push({
           id,
           flavor: safeFlavor,
@@ -273,7 +306,8 @@ export function listConversations(flavor = 'antigravity-cli', limit = 1000) {
           stepCount: Number(r.step_count || 0),
           updatedAt,
           status: r.status || '',
-          active: Boolean(r.not_fully_idle) || r.status === 'CASCADE_RUN_STATUS_RUNNING',
+          active,
+          waitingDecision,
           workspaceUri,
           parentConversationId: parentId,
           nestingDepth: Number(r.nesting_depth || 0),
@@ -422,6 +456,100 @@ function extractPlanStepsList(args) {
       title: s.title.trim(),
       status: typeof s.status === 'string' ? s.status.trim().toLowerCase() : 'pending',
     }));
+}
+
+function isDecisionToolName(name) {
+  const lower = String(name || '').toLowerCase();
+  return lower === 'ask_question' || lower === 'exit_plan_mode';
+}
+
+function extractAskQuestionSpec(args) {
+  if (!args || typeof args !== 'object') return [];
+  let raw = args.questions;
+  if (typeof raw === 'string') {
+    try { raw = JSON.parse(raw); } catch { raw = null; }
+  }
+  if (!Array.isArray(raw) && typeof args.question === 'string') {
+    raw = [args];
+  }
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((q) => q && typeof q === 'object' && typeof q.question === 'string' && q.question.trim())
+    .map((q, idx) => {
+      let opts = q.options;
+      if (typeof opts === 'string') {
+        try { opts = JSON.parse(opts); } catch { opts = []; }
+      }
+      return {
+        index: idx + 1,
+        question: q.question.trim(),
+        options: Array.isArray(opts) ? opts.map((o) => String(o ?? '').trim()).filter(Boolean) : [],
+        isMultiSelect: Boolean(q.is_multi_select ?? q.isMultiSelect),
+      };
+    });
+}
+
+function parseAskQuestionAnswers(bodyText) {
+  const answers = {};
+  const cleaned = String(bodyText ?? '').trim();
+  if (!cleaned) return answers;
+  const regex = /(?:^|\r?\n)A(\d+):\s*([\s\S]*?)(?=\r?\nA\d+:\s*|$)/g;
+  let m;
+  let matchedAny = false;
+  while ((m = regex.exec(cleaned)) !== null) {
+    matchedAny = true;
+    const qIdx = Number(m[1]);
+    if (Number.isInteger(qIdx) && qIdx > 0) {
+      answers[qIdx] = m[2].trim();
+    }
+  }
+  if (!matchedAny) {
+    answers[1] = cleaned;
+  }
+  return answers;
+}
+
+function inspectTailPendingDecision(transcriptPath) {
+  if (!transcriptPath || !existsSync(transcriptPath)) return null;
+  let fd;
+  try {
+    const st = statSync(transcriptPath);
+    if (st.size === 0) return null;
+    const maxBytes = 49152;
+    const readLen = Math.min(st.size, maxBytes);
+    const startOffset = st.size - readLen;
+    const buf = Buffer.allocUnsafe(readLen);
+    fd = openSync(transcriptPath, 'r');
+    const bytesRead = readSync(fd, buf, 0, readLen, startOffset);
+    let text = buf.toString('utf-8', 0, bytesRead);
+    if (startOffset > 0) {
+      const firstNl = text.indexOf('\n');
+      if (firstNl !== -1) text = text.slice(firstNl + 1);
+    }
+    if (!text.includes('ask_question') && !text.includes('exit_plan_mode')) {
+      return null;
+    }
+    const tailSteps = [];
+    for (const line of text.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      try {
+        tailSteps.push(JSON.parse(trimmed));
+      } catch {}
+    }
+    if (tailSteps.length === 0) return null;
+    const view = buildNormalizedView(tailSteps);
+    if (view.summary?.activeStatus === 'waiting_decision' && view.summary.pendingDecision) {
+      return view.summary.pendingDecision;
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch {}
+    }
+  }
 }
 
 function parseToolContentMetadata(rawContent) {
@@ -619,7 +747,12 @@ function classifyModelFamily(modelName = '') {
   return 'Other Models';
 }
 
-export function buildNormalizedView(rawSteps) {
+export function buildNormalizedView(rawSteps, {
+  sessionStopped = false,
+  userCanceled = false,
+  transcriptMtimeMs = 0,
+  hasActiveTaskLog = false,
+} = {}) {
   const turns = [];
   let currentTurn = null;
   let pendingToolsQueue = [];
@@ -703,6 +836,26 @@ export function buildNormalizedView(rawSteps) {
 
     if (source === 'USER_EXPLICIT' || type === 'USER_INPUT') {
       postCheckpointUserChars += (step.content || '').length;
+      if (currentTurn) {
+        if (pendingToolsQueue.length > 0) {
+          for (const pendingTool of pendingToolsQueue) {
+            pendingTool.status = 'canceled';
+            if (pendingTool._decisionItem) {
+              pendingTool._decisionItem.status = 'canceled';
+            }
+          }
+          currentTurn.interrupted = true;
+        }
+        for (const prevItem of currentTurn.items) {
+          if (prevItem.kind === 'decision' && prevItem.status === 'waiting') {
+            prevItem.status = 'canceled';
+            currentTurn.interrupted = true;
+          } else if (prevItem.status === 'RUNNING') {
+            prevItem.status = 'canceled';
+            currentTurn.interrupted = true;
+          }
+        }
+      }
       pendingToolsQueue = [];
       const parsedUser = parseUserInput(step.content || '');
       currentTurn = {
@@ -746,6 +899,11 @@ export function buildNormalizedView(rawSteps) {
 
       const content = typeof step.content === 'string' ? step.content.trim() : '';
       const toolCalls = Array.isArray(step.tool_calls) ? step.tool_calls : [];
+      const hasDecisionTool = toolCalls.some((tc) => isDecisionToolName(tc?.name || tc?.function?.name));
+      const onlyDecisionOrStepsTools = hasDecisionTool && toolCalls.every((tc) => {
+        const n = String(tc?.name || tc?.function?.name || '').toLowerCase();
+        return isDecisionToolName(n) || n === 'update_steps';
+      });
       if (content) {
         turn.items.push({
           kind: 'markdown',
@@ -755,18 +913,21 @@ export function buildNormalizedView(rawSteps) {
           status,
           model: step.model || '',
           text: content,
-          intermediate: toolCalls.length > 0,
+          intermediate: toolCalls.length > 0 && !onlyDecisionOrStepsTools,
+          keepVisibleWithDecision: onlyDecisionOrStepsTools,
         });
       }
 
       if (toolCalls.length > 0) {
         pendingToolsQueue = [];
+        const decisionItemsForStep = [];
         const entries = toolCalls.map((tc, tcIdx) => {
           totalToolCalls += 1;
           turn.stats.toolCount += 1;
           const name = tc?.name || tc?.function?.name || 'tool';
+          const lowerName = name.toLowerCase();
           const args = normalizeToolArgs(tc?.args || tc?.arguments || {});
-          if (name.toLowerCase() === 'update_steps') {
+          if (lowerName === 'update_steps') {
             const stepsList = extractPlanStepsList(args);
             if (stepsList.length > 0) {
               const doneCount = stepsList.filter((s) => s.status === 'done').length;
@@ -780,6 +941,46 @@ export function buildNormalizedView(rawSteps) {
               };
             }
           }
+          let decisionItem = null;
+          if (lowerName === 'ask_question') {
+            const questions = extractAskQuestionSpec(args);
+            decisionItem = {
+              kind: 'decision',
+              decisionType: 'ask_question',
+              id: `dec-${stepIndex}-${tcIdx}`,
+              stepIndex,
+              resultStepIndex: null,
+              createdAt,
+              status: 'waiting',
+              durationMs: null,
+              title: questions[0]?.question || '',
+              questions,
+              answers: {},
+              rawAnswer: '',
+              errorMsg: '',
+            };
+            decisionItemsForStep.push(decisionItem);
+          } else if (lowerName === 'exit_plan_mode') {
+            const planMd = typeof args.plan === 'string' ? args.plan.trim() : '';
+            const firstHeading = (planMd.match(/^#+\s+(.+)$/m)?.[1] || '').trim();
+            decisionItem = {
+              kind: 'decision',
+              decisionType: 'approve_plan',
+              id: `dec-${stepIndex}-${tcIdx}`,
+              stepIndex,
+              resultStepIndex: null,
+              createdAt,
+              status: 'waiting',
+              durationMs: null,
+              title: firstHeading || 'Implementation Plan',
+              planMarkdown: planMd,
+              questions: [],
+              answers: {},
+              rawAnswer: '',
+              errorMsg: '',
+            };
+            decisionItemsForStep.push(decisionItem);
+          }
           const entry = {
             id: `tool-${stepIndex}-${tcIdx}`,
             stepIndex,
@@ -790,7 +991,7 @@ export function buildNormalizedView(rawSteps) {
             args,
             diff: extractEditDiff(name, args),
             createdAt,
-            status: status === 'RUNNING' ? 'running' : 'pending',
+            status: isDecisionToolName(lowerName) ? 'waiting' : (status === 'RUNNING' ? 'running' : 'pending'),
             durationMs: null,
             statusText: '',
             errorMsg: '',
@@ -798,6 +999,9 @@ export function buildNormalizedView(rawSteps) {
             spooledPath: '',
             taskLogPath: '',
           };
+          if (decisionItem) {
+            Object.defineProperty(entry, '_decisionItem', { value: decisionItem, enumerable: false });
+          }
           pendingToolsQueue.push(entry);
           return entry;
         });
@@ -809,6 +1013,9 @@ export function buildNormalizedView(rawSteps) {
           createdAt,
           tools: entries,
         });
+        for (const decItem of decisionItemsForStep) {
+          turn.items.push(decItem);
+        }
       }
       continue;
     }
@@ -826,8 +1033,11 @@ export function buildNormalizedView(rawSteps) {
       const subagentMatch = (step.content || '').match(/"conversationId"\s*:\s*"([0-9a-f-]{8,})"/i);
       const targetTool = pendingToolsQueue.shift();
       if (targetTool) {
+        const isDecision = Boolean(targetTool._decisionItem);
         targetTool.resultStepIndex = stepIndex;
-        targetTool.status = status === 'RUNNING' ? 'running' : (hasError ? 'error' : 'done');
+        targetTool.status = status === 'RUNNING'
+          ? (isDecision ? 'waiting' : 'running')
+          : (hasError ? 'error' : 'done');
         targetTool.durationMs = meta.durationMs;
         targetTool.statusText = meta.statusText;
         targetTool.errorMsg = step.error || meta.errorMsg || '';
@@ -836,6 +1046,23 @@ export function buildNormalizedView(rawSteps) {
         targetTool.taskLogPath = meta.taskLogPath;
         if (subagentMatch) {
           targetTool.subagentId = subagentMatch[1];
+        }
+        if (targetTool._decisionItem) {
+          const dec = targetTool._decisionItem;
+          dec.resultStepIndex = stepIndex;
+          dec.durationMs = meta.durationMs;
+          dec.rawAnswer = meta.body || '';
+          dec.errorMsg = step.error || meta.errorMsg || '';
+          if (status === 'RUNNING') {
+            dec.status = 'waiting';
+          } else if (hasError) {
+            dec.status = 'canceled';
+          } else {
+            dec.status = 'answered';
+            if (dec.decisionType === 'ask_question') {
+              dec.answers = parseAskQuestionAnswers(meta.body || '');
+            }
+          }
         }
       } else {
         // Standalone GENERIC output (e.g., after a restart or orphaned tool result)
@@ -914,27 +1141,102 @@ export function buildNormalizedView(rawSteps) {
     }
   }
 
+  let pendingDecision = null;
   if (pendingToolsQueue.length > 0) {
-    // Remaining tool calls on the latest turn have not emitted GENERIC result steps yet -> actively running!
-    activeStatus = 'running';
-    for (const pendingTool of pendingToolsQueue) {
-      if (pendingTool.status === 'pending') {
-        pendingTool.status = 'running';
+    const waitingTool = pendingToolsQueue.find((pt) => Boolean(pt._decisionItem));
+    const staleNonDecisionOrphan =
+      !waitingTool &&
+      !hasActiveTaskLog &&
+      transcriptMtimeMs > 0 &&
+      Date.now() - transcriptMtimeMs > 5 * 60 * 1000;
+
+    if (sessionStopped || userCanceled || staleNonDecisionOrphan) {
+      for (const pendingTool of pendingToolsQueue) {
+        pendingTool.status = 'canceled';
+        if (pendingTool._decisionItem) {
+          pendingTool._decisionItem.status = 'canceled';
+        }
+      }
+      if (turns.length > 0) {
+        turns[turns.length - 1].interrupted = true;
+      }
+      activeStatus = 'canceled';
+      pendingDecision = null;
+    } else {
+      for (const pendingTool of pendingToolsQueue) {
+        if (pendingTool._decisionItem) {
+          pendingTool.status = 'waiting';
+          pendingTool._decisionItem.status = 'waiting';
+        } else if (pendingTool.status === 'pending') {
+          pendingTool.status = 'running';
+        }
+      }
+      if (waitingTool?._decisionItem) {
+        const dec = waitingTool._decisionItem;
+        activeStatus = 'waiting_decision';
+        pendingDecision = {
+          id: dec.id,
+          decisionType: dec.decisionType,
+          stepIndex: dec.stepIndex,
+          createdAt: dec.createdAt,
+          title: dec.title || '',
+          questionCount: dec.questions?.length || 1,
+        };
+      } else {
+        activeStatus = 'running';
       }
     }
-  } else if (rawSteps.length > 0 && rawSteps[rawSteps.length - 1]?.status !== 'RUNNING') {
-    activeStatus = 'idle';
+  } else if (turns.length > 0) {
+    const lastTurn = turns[turns.length - 1];
+    const lastTurnItems = lastTurn.items || [];
+    const unresolvedDec = [...lastTurnItems].reverse().find((it) => it.kind === 'decision' && it.status === 'waiting');
+    const lastRawStep = rawSteps.length > 0 ? rawSteps[rawSteps.length - 1] : null;
+    const lastRawType = lastRawStep?.type || '';
+    const lastRawSource = lastRawStep?.source || '';
+
+    if (sessionStopped || userCanceled) {
+      if (unresolvedDec) {
+        unresolvedDec.status = 'canceled';
+        lastTurn.interrupted = true;
+      }
+      for (const it of lastTurnItems) {
+        if (it.status === 'RUNNING') {
+          it.status = 'canceled';
+          lastTurn.interrupted = true;
+        }
+      }
+      const stoppedMidLoop = lastRawType === 'GENERIC' || lastRawType === 'USER_INPUT' || lastRawSource === 'USER_EXPLICIT';
+      const hasFinalMarkdown = lastTurnItems.some((it) => it.kind === 'markdown' && !it.intermediate);
+      const hasError = lastTurnItems.some((it) => it.kind === 'error');
+      if ((stoppedMidLoop && !hasError) || (userCanceled && !hasFinalMarkdown && !hasError)) {
+        lastTurn.interrupted = true;
+      }
+      activeStatus = lastTurn.interrupted ? 'canceled' : 'idle';
+      pendingDecision = null;
+    } else if (unresolvedDec) {
+      activeStatus = 'waiting_decision';
+      pendingDecision = {
+        id: unresolvedDec.id,
+        decisionType: unresolvedDec.decisionType,
+        stepIndex: unresolvedDec.stepIndex,
+        createdAt: unresolvedDec.createdAt,
+        title: unresolvedDec.title || '',
+        questionCount: unresolvedDec.questions?.length || 1,
+      };
+    } else if (rawSteps.length > 0 && lastRawStep?.status !== 'RUNNING') {
+      activeStatus = 'idle';
+    }
   }
 
   // Mark any markdown item followed by further thinking or tool_group in the same turn as intermediate,
-  // and compute per-turn process duration & counts for high-level process folding.
+  // unless it was explicitly paired with a user-facing decision prompt (`ask_question` / `exit_plan_mode`).
   for (const t of turns) {
     let seenProcessAfter = false;
     for (let k = t.items.length - 1; k >= 0; k--) {
       const it = t.items[k];
       if (it.kind === 'thinking' || it.kind === 'tool_group') {
         seenProcessAfter = true;
-      } else if (it.kind === 'markdown' && seenProcessAfter) {
+      } else if (it.kind === 'markdown' && seenProcessAfter && !it.keepVisibleWithDecision) {
         it.intermediate = true;
       }
     }
@@ -1001,6 +1303,7 @@ export function buildNormalizedView(rawSteps) {
       totalOutputTokens,
       totalCacheReadTokens,
       activeStatus,
+      pendingDecision,
       activeModel,
       contextWindow: {
         model: activeModel,
@@ -1033,18 +1336,42 @@ export function buildNormalizedView(rawSteps) {
  * Uses byte-offset append reading whenever the log only grew and the tail wasn't mutating in-place.
  */
 export class TranscriptReader {
-  #cache = new Map(); // path -> { bytesRead, mtimeMs, partial, steps, view }
+  #cache = new Map(); // path -> { bytesRead, mtimeMs, partial, steps, view, sessionStopped, userCanceled, hasActiveTaskLog, staleNow }
 
-  read(transcriptPath) {
+  read(transcriptPath, opts = {}) {
     if (!transcriptPath || !existsSync(transcriptPath)) {
-      return { rawSteps: [], view: buildNormalizedView([]), updatedAt: 0 };
+      return { rawSteps: [], view: buildNormalizedView([], opts), updatedAt: 0 };
     }
 
     const st = statSync(transcriptPath);
+    const sessionStopped = Boolean(opts.sessionStopped);
+    const userCanceled = Boolean(opts.userCanceled);
+    const hasActiveTaskLog = Boolean(opts.hasActiveTaskLog);
+    const staleNow = !sessionStopped && !hasActiveTaskLog && st.mtimeMs > 0 && (Date.now() - st.mtimeMs > 5 * 60 * 1000);
+    const normOpts = {
+      sessionStopped,
+      userCanceled,
+      transcriptMtimeMs: st.mtimeMs,
+      hasActiveTaskLog,
+    };
     const cached = this.#cache.get(transcriptPath);
 
     if (cached && st.size === cached.bytesRead && st.mtimeMs === cached.mtimeMs) {
-      return { rawSteps: cached.steps, view: cached.view, updatedAt: st.mtimeMs };
+      if (
+        cached.sessionStopped === sessionStopped &&
+        cached.userCanceled === userCanceled &&
+        cached.hasActiveTaskLog === hasActiveTaskLog &&
+        cached.staleNow === staleNow
+      ) {
+        return { rawSteps: cached.steps, view: cached.view, updatedAt: st.mtimeMs };
+      }
+      const nextView = buildNormalizedView(cached.steps, normOpts);
+      cached.view = nextView;
+      cached.sessionStopped = sessionStopped;
+      cached.userCanceled = userCanceled;
+      cached.hasActiveTaskLog = hasActiveTaskLog;
+      cached.staleNow = staleNow;
+      return { rawSteps: cached.steps, view: nextView, updatedAt: st.mtimeMs };
     }
 
     const lastStepRunning = cached?.steps?.length > 0 && cached.steps[cached.steps.length - 1]?.status === 'RUNNING';
@@ -1087,13 +1414,17 @@ export class TranscriptReader {
       }
     }
 
-    const view = buildNormalizedView(steps);
+    const view = buildNormalizedView(steps, normOpts);
     this.#cache.set(transcriptPath, {
       bytesRead: readFrom,
       mtimeMs: st.mtimeMs,
       partial,
       steps,
       view,
+      sessionStopped,
+      userCanceled,
+      hasActiveTaskLog,
+      staleNow,
     });
 
     if (this.#cache.size > 24) {

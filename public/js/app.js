@@ -317,19 +317,240 @@ const state = {
   authRequired: false,
   authenticated: true,
   serverBootId: null,
+  navSeq: 0,
+  popupReqSeq: 0,
+  sideReqSeq: 0,
+  sidebarPointerInside: false,
+  sidebarMouseDown: false,
+  sidebarDirtyWhileHovered: false,
+  pendingFocusTarget: null,
+  pendingDecisionAlert: null,
+  seenDecisionKeys: (() => {
+    try {
+      const arr = JSON.parse(sessionStorage.getItem('amp-seen-decisions-v1') || '[]');
+      return new Set(Array.isArray(arr) ? arr.filter(Boolean) : []);
+    } catch {
+      return new Set();
+    }
+  })(),
 };
 
 const el = (id) => document.getElementById(id);
 
 let toastTimer = null;
+let toastHoverPaused = false;
+
+function hideToast() {
+  const node = el('app-toast');
+  if (!node) return;
+  if (toastTimer) {
+    clearTimeout(toastTimer);
+    toastTimer = null;
+  }
+  state.pendingFocusTarget = null;
+  state.pendingDecisionAlert = null;
+  node.classList.remove('error', 'actionable', 'decision-alert');
+  node.classList.add('hidden');
+}
+
 function showToast(msg, isError = false) {
   const node = el('app-toast');
   if (!node) return;
+  state.pendingFocusTarget = null;
+  state.pendingDecisionAlert = null;
+  node.classList.remove('actionable', 'decision-alert', 'hidden');
   node.textContent = msg;
   node.classList.toggle('error', Boolean(isError));
-  node.classList.remove('hidden');
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => node.classList.add('hidden'), 3200);
+  toastTimer = setTimeout(() => {
+    toastTimer = null;
+    node.classList.add('hidden');
+  }, 3200);
+}
+
+function scheduleSwitchToastAutoHide(delayMs = 9500) {
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toastTimer = null;
+    if (toastHoverPaused) return;
+    hideToast();
+  }, delayMs);
+}
+
+function showSwitchPromptToast(target) {
+  const node = el('app-toast');
+  if (!node || !target) return;
+  state.pendingFocusTarget = target;
+  state.pendingDecisionAlert = null;
+  const isDoc = Boolean(target.previewId);
+  const resolvedTitle = (target.title || '').trim() || (
+    isDoc
+      ? (state.customPreviews.find((d) => d.id === target.previewId)?.title || target.previewId)
+      : (state.conversations.find((c) => c.id === target.conversationId)?.title || String(target.conversationId || '').slice(0, 8))
+  );
+  const msgText = isDoc
+    ? t('focusPromptDoc', { title: resolvedTitle })
+    : t('focusPromptSession', { title: resolvedTitle });
+
+  node.classList.remove('error', 'decision-alert', 'hidden');
+  node.classList.add('actionable');
+  node.innerHTML = `
+    <div class="toast-switch-row">
+      <span class="toast-switch-text" title="${escapeHtml(msgText)}">${escapeHtml(msgText)}</span>
+      <span class="toast-switch-actions">
+        <button type="button" class="pill-btn primary" style="height:25px;padding:0 9px;font-size:0.73rem;" data-toast-switch>${escapeHtml(t('focusSwitchBtn'))}</button>
+        <button type="button" class="icon-btn sm" data-toast-dismiss title="${escapeHtml(t('focusDismissTip'))}">✕</button>
+      </span>
+    </div>
+  `;
+  scheduleSwitchToastAutoHide(9500);
+}
+
+function saveSeenDecisionKeys() {
+  try {
+    const arr = Array.from(state.seenDecisionKeys).slice(-80);
+    sessionStorage.setItem('amp-seen-decisions-v1', JSON.stringify(arr));
+  } catch {}
+}
+
+function scrollToDecisionCard(decisionId = '') {
+  requestAnimationFrame(() => {
+    const col = el('reader-column');
+    if (!col) return;
+    const card = (decisionId && col.querySelector(`[data-decision-id="${CSS.escape(decisionId)}"]`)) ||
+      col.querySelector('.decision-card.is-waiting') ||
+      col.querySelector('.decision-card:last-of-type');
+    if (card) {
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      card.classList.add('pulse-focus');
+      setTimeout(() => card.classList.remove('pulse-focus'), 1800);
+    }
+  });
+}
+
+function showDecisionPromptToast(alertInfo) {
+  const node = el('app-toast');
+  if (!node || !alertInfo) return;
+  state.pendingFocusTarget = null;
+  state.pendingDecisionAlert = alertInfo;
+
+  const isCurrent = state.mode === 'sessions' && state.activeConvId === alertInfo.convId;
+  const snippet = (alertInfo.questionTitle || '').replace(/\s+/g, ' ').trim().slice(0, 72) || t('decisionRequiredTitle');
+  const sessionTitle = (alertInfo.sessionTitle || '').trim() || alertInfo.convId.slice(0, 8);
+  const msgText = isCurrent
+    ? t('decisionToastCurrent', { title: snippet })
+    : t('decisionToastBackground', { session: sessionTitle, title: snippet });
+  const btnLabel = isCurrent ? t('decisionJumpBtn') : t('decisionViewSessionBtn');
+
+  node.classList.remove('error', 'hidden');
+  node.classList.add('actionable', 'decision-alert');
+  node.innerHTML = `
+    <div class="toast-switch-row">
+      <span class="toast-switch-text" title="${escapeHtml(msgText)}">${escapeHtml(msgText)}</span>
+      <span class="toast-switch-actions">
+        <button type="button" class="pill-btn warning-btn" style="height:25px;padding:0 9px;font-size:0.73rem;" data-toast-decision>${escapeHtml(btnLabel)}</button>
+        <button type="button" class="icon-btn sm" data-toast-dismiss title="${escapeHtml(t('focusDismissTip'))}">✕</button>
+      </span>
+    </div>
+  `;
+  scheduleSwitchToastAutoHide(16000);
+}
+
+function syncWindowTitleIndicator() {
+  const activeWaiting = state.mode === 'sessions' && state.currentViewData?.view?.summary?.activeStatus === 'waiting_decision';
+  const anySidebarWaiting = state.conversations.some((c) => isConvWaitingDecision(c));
+  const needsPrefix = activeWaiting || anySidebarWaiting;
+  const baseTitle = 'Antigravity Session Preview';
+  const nextTitle = needsPrefix ? `⏳ ${baseTitle}` : baseTitle;
+  if (document.title !== nextTitle) {
+    document.title = nextTitle;
+  }
+}
+
+function evaluateDecisionAlerts() {
+  syncWindowTitleIndicator();
+
+  // Auto-dismiss existing decision toast if its conversation is no longer waiting for a decision
+  if (state.pendingDecisionAlert) {
+    const { convId } = state.pendingDecisionAlert;
+    const activeStillWaiting = state.mode === 'sessions' &&
+      state.activeConvId === convId &&
+      state.currentViewData?.view?.summary?.activeStatus === 'waiting_decision';
+    const convObj = state.conversations.find((c) => c.id === convId);
+    const sidebarStillWaiting = isConvWaitingDecision(convObj);
+    if (!activeStillWaiting && !sidebarStillWaiting) {
+      hideToast();
+    }
+  }
+
+  // 1. Check currently open session first
+  if (state.mode === 'sessions' && state.activeConvId && state.currentViewData?.view?.summary?.activeStatus === 'waiting_decision') {
+    const pd = state.currentViewData.view.summary.pendingDecision;
+    if (pd) {
+      const alertKey = `${state.activeConvId}:${pd.stepIndex}`;
+      if (!state.seenDecisionKeys.has(alertKey)) {
+        state.seenDecisionKeys.add(alertKey);
+        saveSeenDecisionKeys();
+        const meta = state.conversations.find((c) => c.id === state.activeConvId);
+        showDecisionPromptToast({
+          convId: state.activeConvId,
+          stepIndex: pd.stepIndex,
+          decisionId: pd.id || '',
+          sessionTitle: meta?.title || '',
+          questionTitle: pd.title || '',
+        });
+        return;
+      }
+    }
+  }
+
+  // 2. Check background sessions in sidebar
+  for (const c of state.conversations) {
+    if (!isConvWaitingDecision(c) || !c.waitingDecision) continue;
+    const pd = c.waitingDecision;
+    const alertKey = `${c.id}:${pd.stepIndex ?? 'wait'}`;
+    if (!state.seenDecisionKeys.has(alertKey)) {
+      state.seenDecisionKeys.add(alertKey);
+      saveSeenDecisionKeys();
+      showDecisionPromptToast({
+        convId: c.id,
+        stepIndex: pd.stepIndex ?? 0,
+        decisionId: pd.id || '',
+        sessionTitle: c.title || '',
+        questionTitle: pd.title || '',
+      });
+      return;
+    }
+  }
+}
+
+function persistNavigationState({ mode, convId, previewId } = {}) {
+  try {
+    if (mode) {
+      sessionStorage.setItem('amp-tab-mode', mode);
+      localStorage.setItem('amp-mode', mode);
+    }
+    if (convId) {
+      sessionStorage.setItem('amp-tab-conv', convId);
+      localStorage.setItem('amp-last-conv', convId);
+    }
+    if (previewId) {
+      sessionStorage.setItem('amp-tab-preview', previewId);
+      localStorage.setItem('amp-last-preview', previewId);
+    }
+  } catch {}
+}
+
+function pickDefaultConversationId() {
+  if (!Array.isArray(state.conversations) || state.conversations.length === 0) return '';
+  let tabConv = '';
+  let savedConv = '';
+  try { tabConv = sessionStorage.getItem('amp-tab-conv') || ''; } catch {}
+  try { savedConv = localStorage.getItem('amp-last-conv') || ''; } catch {}
+  if (tabConv && state.conversations.some((c) => c.id === tabConv)) return tabConv;
+  if (savedConv && state.conversations.some((c) => c.id === savedConv)) return savedConv;
+  const latestRoot = state.conversations.find((c) => !c.isSubagent);
+  return latestRoot?.id || state.conversations[0]?.id || '';
 }
 
 async function apiFetch(url, opts = {}) {
@@ -837,6 +1058,11 @@ function applyLanguage(nextLang) {
       populatePreviewBody(el('popup-preview-body'), state.popupCurrent, 'popup-code-view');
     }
   }
+  if (state.pendingFocusTarget && !el('app-toast')?.classList.contains('hidden')) {
+    showSwitchPromptToast(state.pendingFocusTarget);
+  } else if (state.pendingDecisionAlert && !el('app-toast')?.classList.contains('hidden')) {
+    showDecisionPromptToast(state.pendingDecisionAlert);
+  }
 }
 
 let transcriptRenderer = null;
@@ -893,6 +1119,7 @@ function setLiveBadge(text, kind = 'idle') {
   pill.className = 'live-pill';
   if (kind === 'live') pill.classList.add('live');
   else if (kind === 'active') pill.classList.add('active-phase');
+  else if (kind === 'decision') pill.classList.add('waiting-decision');
 }
 
 function formatCompactDate(ms) {
@@ -1063,7 +1290,24 @@ function markConversationAsRead(convId, knownStepCount = null) {
   }
 }
 
-async function loadConversations() {
+let bgSidebarRenderTimer = null;
+function scheduleBackgroundSidebarRender() {
+  if (state.sidebarPointerInside || state.sidebarMouseDown || state.renamingDocId) {
+    state.sidebarDirtyWhileHovered = true;
+    return;
+  }
+  if (bgSidebarRenderTimer) return;
+  bgSidebarRenderTimer = setTimeout(() => {
+    bgSidebarRenderTimer = null;
+    if (state.sidebarPointerInside || state.sidebarMouseDown || state.renamingDocId) {
+      state.sidebarDirtyWhileHovered = true;
+      return;
+    }
+    renderSidebarList();
+  }, 90);
+}
+
+async function loadConversations({ fromBackground = false } = {}) {
   try {
     const res = await apiFetch(`/api/conversations?flavor=${encodeURIComponent(state.flavor)}`);
     if (!res.ok) return;
@@ -1075,18 +1319,25 @@ async function loadConversations() {
       try { localStorage.setItem('amp-pinned-sessions', JSON.stringify(state.pinnedIds)); } catch {}
     }
     updatePinSessionButton();
-    if (state.mode === 'sessions') renderSidebarList();
+    evaluateDecisionAlerts();
+    if (state.mode === 'sessions') {
+      if (fromBackground) scheduleBackgroundSidebarRender();
+      else renderSidebarList();
+    }
   } catch {}
 }
 
-async function loadCustomPreviews() {
+async function loadCustomPreviews({ fromBackground = false } = {}) {
   try {
     const res = await apiFetch('/api/previews');
     if (!res.ok) return;
     const data = await res.json();
     state.customPreviews = data.previews || [];
     if (data.storagePath) state.docsStoragePath = data.storagePath;
-    if (state.mode === 'docs') renderSidebarList();
+    if (state.mode === 'docs') {
+      if (fromBackground) scheduleBackgroundSidebarRender();
+      else renderSidebarList();
+    }
   } catch {}
 }
 
@@ -1099,14 +1350,24 @@ function resolveProjectLabel(c) {
   return 'Unassigned';
 }
 
+function isConvWaitingDecision(c) {
+  if (!c) return false;
+  if (c.hookState?.phase === 'stopped' && Date.now() - (c.hookState.updatedAt || 0) < 15000) return false;
+  return Boolean(c.waitingDecision);
+}
+
 function isConvActivelyRunning(c) {
   if (!c) return false;
+  if (isConvWaitingDecision(c)) return true;
   if (isHookActivelyRunning(c.hookState)) return true;
   if (c.hookState?.phase === 'stopped' && Date.now() - (c.hookState.updatedAt || 0) < 15000) return false;
   return Boolean(c.active);
 }
 
 function formatSidebarLiveStatus(c) {
+  if (isConvWaitingDecision(c)) {
+    return `⏳ ${t('sidebarDecisionBadge')}`;
+  }
   if (!isConvActivelyRunning(c)) return '';
   const hs = c.hookState;
   if (hs?.phase === 'thinking' || hs?.phase === 'between_steps') {
@@ -1118,54 +1379,72 @@ function formatSidebarLiveStatus(c) {
   return t('sidebarRunningBadge');
 }
 
-function patchConversationSidebarState(convId, { hookState, stepCount, activeStatus, updatedAt } = {}) {
+function patchConversationSidebarState(convId, { hookState, stepCount, activeStatus, pendingDecision, updatedAt } = {}) {
   if (!convId) return;
   const idx = state.conversations.findIndex((c) => c.id === convId);
   if (idx === -1) {
-    loadConversations();
+    loadConversations({ fromBackground: true });
     return;
   }
   const cur = state.conversations[idx];
   const nextHook = hookState !== undefined ? hookState : cur.hookState;
   const hookRunning = isHookActivelyRunning(nextHook);
   const hookStopped = nextHook?.phase === 'stopped';
-  const nextActive = hookRunning || activeStatus === 'running' || (cur.active && !hookStopped && activeStatus !== 'idle');
+  const nextActive = hookRunning || activeStatus === 'running' || activeStatus === 'waiting_decision' || (cur.active && !hookStopped && activeStatus !== 'idle' && activeStatus !== 'canceled');
   const nextSteps = stepCount != null ? Math.max(cur.stepCount || 0, stepCount) : cur.stepCount;
   const nextUpdated = Math.max(cur.updatedAt || 0, updatedAt || 0, nextHook?.updatedAt || 0);
+
+  let nextWaitingDecision = cur.waitingDecision || null;
+  if (activeStatus === 'waiting_decision') {
+    nextWaitingDecision = pendingDecision || cur.waitingDecision || { title: '' };
+  } else if (activeStatus && activeStatus !== 'waiting_decision') {
+    nextWaitingDecision = null;
+  } else if (hookStopped || nextHook?.hookEventName === 'PostToolUse') {
+    nextWaitingDecision = null;
+  }
 
   state.conversations[idx] = {
     ...cur,
     hookState: nextHook,
     active: nextActive,
+    waitingDecision: nextWaitingDecision,
     stepCount: nextSteps,
     updatedAt: nextUpdated,
   };
   reconcileSessionReadState([state.conversations[idx]]);
+  evaluateDecisionAlerts();
   if (state.mode === 'sessions') {
-    renderSidebarList();
+    scheduleBackgroundSidebarRender();
   }
 }
 
 function renderSessionButtonHtml(c, { showProjectPill = false } = {}) {
   const active = c.id === state.activeConvId ? 'active' : '';
   const sub = c.isSubagent ? 'is-subagent' : '';
-  const runningNow = isConvActivelyRunning(c);
-  const isUnreadCompleted = !runningNow && state.unreadConvIds.has(c.id);
-  const itemStateCls = runningNow
-    ? 'is-running-session'
-    : (isUnreadCompleted ? 'is-unread-completed' : '');
-  const indicatorHtml = runningNow
-    ? APPLE_SPINNER_SVG
-    : `<span class="status-dot ${isUnreadCompleted ? 'unread-completed' : 'idle-read'}"></span>`;
+  const waitingDec = isConvWaitingDecision(c);
+  const runningNow = !waitingDec && isConvActivelyRunning(c);
+  const isUnreadCompleted = !waitingDec && !runningNow && state.unreadConvIds.has(c.id);
+  const itemStateCls = waitingDec
+    ? 'is-waiting-decision'
+    : (runningNow
+        ? 'is-running-session'
+        : (isUnreadCompleted ? 'is-unread-completed' : ''));
+  const indicatorHtml = waitingDec
+    ? `<span class="status-dot decision-waiting"></span>`
+    : (runningNow
+        ? APPLE_SPINNER_SVG
+        : `<span class="status-dot ${isUnreadCompleted ? 'unread-completed' : 'idle-read'}"></span>`);
   const timeStr = formatCompactDate(c.updatedAt);
   const isPinned = state.pinnedIds.includes(c.id);
   const starTip = isPinned ? t('unpinSessionTip') : t('pinSessionTip');
   const liveLabel = formatSidebarLiveStatus(c);
-  const statusPillHtml = runningNow && liveLabel
-    ? `<span class="session-live-status-pill">${escapeHtml(liveLabel)}</span>`
-    : (isUnreadCompleted
-        ? `<span class="session-unread-pill">${escapeHtml(t('unreadBadge'))}</span>`
-        : '');
+  const statusPillHtml = waitingDec
+    ? `<span class="session-decision-pill">${escapeHtml(liveLabel)}</span>`
+    : (runningNow && liveLabel
+        ? `<span class="session-live-status-pill">${escapeHtml(liveLabel)}</span>`
+        : (isUnreadCompleted
+            ? `<span class="session-unread-pill">${escapeHtml(t('unreadBadge'))}</span>`
+            : ''));
   const projBadge = showProjectPill
     ? `<span class="session-project-pill">${escapeHtml(resolveProjectLabel(c))}</span>`
     : `<span>${escapeHtml(c.id.slice(0, 8))}${c.stepCount ? ` · ${c.stepCount} ${escapeHtml(t('stepsStat'))}` : ''}</span>`;
@@ -1216,6 +1495,11 @@ function showDocHoverPopover(docId, cardEl) {
 }
 
 function renderSidebarList() {
+  state.sidebarDirtyWhileHovered = false;
+  if (bgSidebarRenderTimer) {
+    clearTimeout(bgSidebarRenderTimer);
+    bgSidebarRenderTimer = null;
+  }
   hideDocHoverPopover();
   const container = el('session-list');
   if (!container) return;
@@ -1324,11 +1608,14 @@ function renderSidebarList() {
   const byId = new Map(filtered.map((c) => [c.id, c]));
   const pinnedConvs = state.pinnedIds.map((id) => byId.get(id)).filter(Boolean);
   const pinnedOpen = query ? true : state.pinnedGroupOpen;
-  const pinnedHasRunning = pinnedConvs.some(isConvActivelyRunning);
+  const pinnedHasDecision = pinnedConvs.some(isConvWaitingDecision);
+  const pinnedHasRunning = !pinnedHasDecision && pinnedConvs.some(isConvActivelyRunning);
   const pinnedHasUnread = pinnedConvs.some((s) => !isConvActivelyRunning(s) && state.unreadConvIds.has(s.id));
-  const pinnedStatusHtml = pinnedHasRunning
-    ? `<span class="folder-status-wrap" title="${escapeHtml(t('sidebarRunningBadge'))}">${APPLE_SPINNER_SVG}</span>`
-    : (pinnedHasUnread ? `<span class="status-dot unread-completed" title="${escapeHtml(t('unreadBadge'))}"></span>` : '');
+  const pinnedStatusHtml = pinnedHasDecision
+    ? `<span class="status-dot decision-waiting" title="${escapeHtml(t('waitingDecisionPhase'))}"></span>`
+    : (pinnedHasRunning
+        ? `<span class="folder-status-wrap" title="${escapeHtml(t('sidebarRunningBadge'))}">${APPLE_SPINNER_SVG}</span>`
+        : (pinnedHasUnread ? `<span class="status-dot unread-completed" title="${escapeHtml(t('unreadBadge'))}"></span>` : ''));
   const pinnedSectionHtml = pinnedConvs.length > 0
     ? `<div class="project-folder pinned-folder" data-open="${pinnedOpen}">
         <button type="button" class="project-folder-header" data-toggle-pinned-group>
@@ -1417,11 +1704,14 @@ function renderSidebarList() {
 
     const displayCount = rootAll.length || grp.items.length;
     const folderTooltip = grp.workspaceUri ? `${grp.label} (${grp.workspaceUri})` : grp.label;
-    const groupHasRunning = grp.items.some(isConvActivelyRunning);
+    const groupHasDecision = grp.items.some(isConvWaitingDecision);
+    const groupHasRunning = !groupHasDecision && grp.items.some(isConvActivelyRunning);
     const groupHasUnread = grp.items.some((s) => !isConvActivelyRunning(s) && state.unreadConvIds.has(s.id));
-    const groupRunningDot = groupHasRunning
-      ? `<span class="folder-status-wrap" title="${escapeHtml(t('sidebarRunningBadge'))}">${APPLE_SPINNER_SVG}</span>`
-      : (groupHasUnread ? `<span class="status-dot unread-completed" title="${escapeHtml(t('unreadBadge'))}"></span>` : '');
+    const groupRunningDot = groupHasDecision
+      ? `<span class="status-dot decision-waiting" title="${escapeHtml(t('waitingDecisionPhase'))}"></span>`
+      : (groupHasRunning
+          ? `<span class="folder-status-wrap" title="${escapeHtml(t('sidebarRunningBadge'))}">${APPLE_SPINNER_SVG}</span>`
+          : (groupHasUnread ? `<span class="status-dot unread-completed" title="${escapeHtml(t('unreadBadge'))}"></span>` : ''));
 
     return `<div class="project-folder" data-project-key="${escapeHtml(grp.key)}" data-open="${isOpen}">
       <button type="button" class="project-folder-header" data-toggle-project="${escapeHtml(grp.key)}" title="${escapeHtml(folderTooltip)}">
@@ -1510,12 +1800,14 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
           hookState: data.hookState,
           stepCount: data.view?.summary?.totalSteps,
           activeStatus: data.view?.summary?.activeStatus,
+          pendingDecision: data.view?.summary?.pendingDecision || null,
           updatedAt: data.updatedAt,
         });
       }
       if (data.conversationId && data.conversationId === state.activeConvId && state.mode === 'sessions') {
         state.currentViewData = { ...state.currentViewData, ...data };
-        applyHookPhase(data.hookState);
+        applyHookPhase(data.hookState, data.view?.summary);
+        evaluateDecisionAlerts();
         const scrollEl = el('reader-scroll');
         const nearBottom = scrollEl ? (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 160) : false;
         transcriptRenderer.render(data.conversationId, data.view, {
@@ -1538,7 +1830,7 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
   });
 
   es.addEventListener('conversations-updated', () => {
-    loadConversations();
+    loadConversations({ fromBackground: true });
   });
 
   es.addEventListener('pinned-sessions', (ev) => {
@@ -1548,7 +1840,7 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
         state.pinnedIds = data.pinnedIds;
         try { localStorage.setItem('amp-pinned-sessions', JSON.stringify(state.pinnedIds)); } catch {}
         updatePinSessionButton();
-        if (state.mode === 'sessions') renderSidebarList();
+        if (state.mode === 'sessions') scheduleBackgroundSidebarRender();
       }
     } catch {}
   });
@@ -1569,7 +1861,7 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
       const data = JSON.parse(ev.data);
       if (data.conversationId === state.activeConvId && state.currentViewData?.cliInsights) {
         state.currentViewData.cliInsights.btwNotes = data.btwNotes || [];
-        renderCliToolsDrawer();
+        if (state.mode === 'sessions') renderCliToolsDrawer();
       }
     } catch {}
   });
@@ -1585,34 +1877,36 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
       }
       if (data.conversationId === state.activeConvId) {
         if (state.currentViewData) state.currentViewData.hookState = data.hookState;
-        applyHookPhase(data.hookState);
-        if (state.currentViewData?.view) {
-          const scrollEl = el('reader-scroll');
-          const nearBottom = scrollEl ? (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 160) : false;
-          transcriptRenderer.render(state.activeConvId, state.currentViewData.view, {
-            isRunning: isHookActivelyRunning(data.hookState),
-            isLiveUpdate: true,
-            hookState: data.hookState || null,
-            liveTaskLog: state.currentViewData.liveTaskLog || null,
-            baseDir: state.currentBaseDir,
-            subagents: state.currentViewData.subagents || [],
-            parentSession: state.currentViewData.parentSession || null,
-            cliInsights: state.currentViewData.cliInsights || null,
-            artifacts: state.currentViewData.artifacts || [],
-          });
-          if (state.autoFollow && nearBottom && scrollEl) {
-            scrollEl.scrollTop = scrollEl.scrollHeight;
+        if (state.mode === 'sessions') {
+          applyHookPhase(data.hookState);
+          if (state.currentViewData?.view) {
+            const scrollEl = el('reader-scroll');
+            const nearBottom = scrollEl ? (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 160) : false;
+            transcriptRenderer.render(state.activeConvId, state.currentViewData.view, {
+              isRunning: isHookActivelyRunning(data.hookState),
+              isLiveUpdate: true,
+              hookState: data.hookState || null,
+              liveTaskLog: state.currentViewData.liveTaskLog || null,
+              baseDir: state.currentBaseDir,
+              subagents: state.currentViewData.subagents || [],
+              parentSession: state.currentViewData.parentSession || null,
+              cliInsights: state.currentViewData.cliInsights || null,
+              artifacts: state.currentViewData.artifacts || [],
+            });
+            if (state.autoFollow && nearBottom && scrollEl) {
+              scrollEl.scrollTop = scrollEl.scrollHeight;
+            }
           }
         }
       }
-      loadConversations();
+      loadConversations({ fromBackground: true });
     } catch {}
   });
 
   es.addEventListener('custom-preview', (ev) => {
     try {
       const doc = JSON.parse(ev.data);
-      loadCustomPreviews();
+      loadCustomPreviews({ fromBackground: true });
       if (doc.id === state.activePreviewId && state.mode === 'docs') {
         const scrollEl = el('reader-scroll');
         const nearBottom = scrollEl ? (scrollEl.scrollHeight - scrollEl.scrollTop - scrollEl.clientHeight < 160) : false;
@@ -1627,12 +1921,39 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
   es.addEventListener('focus', (ev) => {
     try {
       const target = JSON.parse(ev.data);
-      if (target.previewId) {
-        openCustomPreview(target.previewId);
-      } else if (target.conversationId) {
-        if (target.flavor) state.flavor = target.flavor;
-        openConversation(target.conversationId);
+      if (!target || (!target.previewId && !target.conversationId)) return;
+
+      const hasActivePage = Boolean(
+        (state.mode === 'sessions' && state.activeConvId) ||
+        (state.mode === 'docs' && state.activePreviewId)
+      );
+      const samePreview = Boolean(target.previewId && state.mode === 'docs' && state.activePreviewId === target.previewId);
+      const sameConv = Boolean(target.conversationId && state.mode === 'sessions' && state.activeConvId === target.conversationId);
+
+      if (samePreview) {
+        openCustomPreview(target.previewId, { preserveScroll: true });
+        return;
       }
+      if (sameConv) {
+        if (target.flavor) state.flavor = target.flavor;
+        openConversation(target.conversationId, { scrollToLatestUser: false });
+        return;
+      }
+
+      if (target.force || !hasActivePage) {
+        hideToast();
+        if (target.previewId) {
+          openCustomPreview(target.previewId);
+        } else if (target.conversationId) {
+          if (target.flavor) state.flavor = target.flavor;
+          openConversation(target.conversationId);
+        }
+        return;
+      }
+
+      if (target.previewId) loadCustomPreviews({ fromBackground: true });
+      else loadConversations({ fromBackground: true });
+      showSwitchPromptToast(target);
     } catch {}
   });
 
@@ -1646,8 +1967,22 @@ function connectSSE({ convId = '', previewId = '' } = {}) {
   };
 }
 
-function applyHookPhase(hookState) {
-  if (!hookState || !hookState.phase) {
+function applyHookPhase(hookState, viewSummary = undefined) {
+  const summary = viewSummary !== undefined ? viewSummary : state.currentViewData?.view?.summary;
+  if (state.mode === 'sessions' && summary?.activeStatus === 'waiting_decision') {
+    setLiveBadge(t('waitingDecisionPhase'), 'decision');
+    return;
+  }
+  if (
+    state.mode === 'sessions' &&
+    (summary?.activeStatus === 'canceled' || hookState?.terminationReason === 'USER_CANCELED') &&
+    hookState?.phase === 'stopped' &&
+    Date.now() - (hookState.updatedAt || 0) < 30000
+  ) {
+    setLiveBadge(t('stoppedCanceledPhase'), 'idle');
+    return;
+  }
+  if (!hookState || !hookState.phase || summary?.activeStatus === 'canceled') {
     setLiveBadge(t('liveSync'), 'live');
     return;
   }
@@ -1770,13 +2105,16 @@ function renderFolderListingIntoContainer(bodyEl, listingData, targetMode = 'sid
 }
 
 async function browseFolderInPreview(folderPath, selectFile = '', targetMode = 'sidebar', preloadedData = null) {
+  const reqId = targetMode === 'popup' ? ++state.popupReqSeq : ++state.sideReqSeq;
   let data = preloadedData;
   if (!data) {
     const qs = new URLSearchParams({ path: folderPath });
     if (selectFile) qs.set('select', selectFile);
     const res = await apiFetch(`/api/folder-entries?${qs.toString()}`);
+    if (targetMode === 'popup' ? reqId !== state.popupReqSeq : reqId !== state.sideReqSeq) return;
     if (!res.ok) return;
     data = await res.json();
+    if (targetMode === 'popup' ? reqId !== state.popupReqSeq : reqId !== state.sideReqSeq) return;
   }
   const leafName = (data.folder || folderPath).replace(/[\\/]+$/, '').split(/[\\/]/).pop() || folderPath;
   if (targetMode === 'popup') {
@@ -1836,12 +2174,13 @@ async function revealInFolder(rawPath, baseDir = '', triggerBtn = null) {
 }
 
 async function openConversation(convId, { scrollToLatestUser = true } = {}) {
+  if (!convId) return;
+  const reqId = ++state.navSeq;
   state.mode = 'sessions';
   state.activeConvId = convId;
-  state.autoFollow = true;
+  if (scrollToLatestUser) state.autoFollow = true;
   markConversationAsRead(convId);
-  localStorage.setItem('amp-mode', 'sessions');
-  localStorage.setItem('amp-last-conv', convId);
+  persistNavigationState({ mode: 'sessions', convId });
   syncUrlState({ conv: convId, flavor: state.flavor });
   updateModeButtons();
   updatePinSessionButton();
@@ -1852,14 +2191,33 @@ async function openConversation(convId, { scrollToLatestUser = true } = {}) {
 
   try {
     const res = await apiFetch(`/api/conversations/${encodeURIComponent(convId)}/view?flavor=${encodeURIComponent(state.flavor)}`);
+    if (reqId !== state.navSeq || state.mode !== 'sessions' || state.activeConvId !== convId) return;
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    if (reqId !== state.navSeq || state.mode !== 'sessions' || state.activeConvId !== convId) return;
     state.currentViewData = data;
     markConversationAsRead(convId, data.view?.summary?.totalSteps || 0);
-    state.currentBaseDir = data.baseDir || meta?.workspaceUri || '';
-    if (data.flavor) state.flavor = data.flavor;
-    if (meta?.title) el('doc-title').textContent = meta.title;
-    applyHookPhase(data.hookState);
+    const freshMeta = state.conversations.find((c) => c.id === convId) || meta;
+    state.currentBaseDir = data.baseDir || freshMeta?.workspaceUri || '';
+    if (data.flavor && data.flavor !== state.flavor) {
+      state.flavor = data.flavor;
+      localStorage.setItem('amp-flavor', state.flavor);
+      const flavorSel = el('flavor-select');
+      if (flavorSel && Array.from(flavorSel.options).some((o) => o.value === data.flavor)) {
+        flavorSel.value = data.flavor;
+      }
+      syncUrlState({ conv: convId, flavor: state.flavor });
+      loadConversations();
+    }
+    if (freshMeta?.title) el('doc-title').textContent = freshMeta.title;
+    patchConversationSidebarState(convId, {
+      hookState: data.hookState,
+      stepCount: data.view?.summary?.totalSteps,
+      activeStatus: data.view?.summary?.activeStatus,
+      pendingDecision: data.view?.summary?.pendingDecision || null,
+      updatedAt: data.updatedAt,
+    });
+    applyHookPhase(data.hookState, data.view?.summary);
     transcriptRenderer.render(convId, data.view, {
       isRunning: isHookActivelyRunning(data.hookState),
       hookState: data.hookState || null,
@@ -1871,11 +2229,17 @@ async function openConversation(convId, { scrollToLatestUser = true } = {}) {
       artifacts: data.artifacts || [],
     });
     if (scrollToLatestUser) {
-      scrollToLastUserTurn();
+      if (data.view?.summary?.activeStatus === 'waiting_decision') {
+        scrollToDecisionCard(data.view?.summary?.pendingDecision?.id || '');
+      } else {
+        scrollToLastUserTurn();
+      }
     }
+    evaluateDecisionAlerts();
     renderCliToolsDrawer();
     connectSSE({ convId });
   } catch (err) {
+    if (reqId !== state.navSeq || state.mode !== 'sessions' || state.activeConvId !== convId) return;
     el('reader-column').innerHTML = `<div class="notice-banner error">Failed to load conversation: ${escapeHtml(err.message)}</div>`;
   }
 }
@@ -2272,22 +2636,48 @@ function renderCustomPreview(doc) {
   renderToc(toc);
 }
 
-async function openCustomPreview(previewId) {
+function showEmptyDocsStage() {
+  ++state.navSeq;
+  state.mode = 'docs';
+  state.activePreviewId = null;
+  state.currentCustomDoc = null;
+  persistNavigationState({ mode: 'docs' });
+  syncUrlState({ mode: 'docs' });
+  setLiveBadge(t('liveSync'), 'live');
+  updateModeButtons();
+  renderSidebarList();
+  el('doc-title').textContent = t('tabDocs');
+  el('reader-column').innerHTML = `<div class="empty-state"><strong>${escapeHtml(t('docsEmptyTitle'))}</strong><span>${t('docsEmptyHint')}</span></div>`;
+  renderToc([]);
+  connectSSE();
+}
+
+async function openCustomPreview(previewId, { preserveScroll = false } = {}) {
+  if (!previewId) return;
+  const reqId = ++state.navSeq;
   state.mode = 'docs';
   state.activePreviewId = previewId;
-  localStorage.setItem('amp-mode', 'docs');
-  localStorage.setItem('amp-last-preview', previewId);
+  persistNavigationState({ mode: 'docs', previewId });
   syncUrlState({ preview: previewId });
+  setLiveBadge(t('liveSync'), 'live');
   updateModeButtons();
   renderSidebarList();
 
   try {
     const res = await apiFetch(`/api/previews/${encodeURIComponent(previewId)}`);
+    if (reqId !== state.navSeq || state.mode !== 'docs' || state.activePreviewId !== previewId) return;
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const doc = await res.json();
+    if (reqId !== state.navSeq || state.mode !== 'docs' || state.activePreviewId !== previewId) return;
+    const scrollEl = el('reader-scroll');
+    const prevScroll = preserveScroll && scrollEl ? scrollEl.scrollTop : 0;
     renderCustomPreview(doc);
+    if (scrollEl) {
+      scrollEl.scrollTop = preserveScroll ? prevScroll : 0;
+    }
     connectSSE({ previewId });
   } catch (err) {
+    if (reqId !== state.navSeq || state.mode !== 'docs' || state.activePreviewId !== previewId) return;
     el('reader-column').innerHTML = `<div class="notice-banner error">Failed to load preview: ${escapeHtml(err.message)}</div>`;
   }
 }
@@ -2310,6 +2700,7 @@ async function openInPopupModal(rawHref, baseDir = '') {
   const body = el('popup-preview-body');
   if (!modal || !body) return;
 
+  const reqId = ++state.popupReqSeq;
   modal.classList.remove('hidden');
   state.popupCurrent = { rawHref, baseDir: baseDir || state.currentBaseDir || '' };
   el('popup-preview-title').textContent = rawHref.split(/[\\/]/).pop() || t('loadingPreview');
@@ -2318,6 +2709,7 @@ async function openInPopupModal(rawHref, baseDir = '') {
 
   try {
     const info = await fetchFileInfo(rawHref, baseDir);
+    if (reqId !== state.popupReqSeq) return;
     state.popupCurrent = { ...info, rawHref };
     el('popup-preview-title').textContent = info.filename;
     el('popup-preview-path').textContent = info.path + (info.hash ? `#${info.hash}` : '');
@@ -2326,6 +2718,7 @@ async function openInPopupModal(rawHref, baseDir = '') {
     el('popup-copy-btn')?.classList.toggle('hidden', isBinaryViewer);
     populatePreviewBody(body, info, 'popup-code-view');
   } catch (err) {
+    if (reqId !== state.popupReqSeq) return;
     body.innerHTML = `<div class="notice-banner error">${escapeHtml(err.message)}</div>`;
   }
 }
@@ -2344,6 +2737,7 @@ async function openInSidePreview(rawHref, baseDir = '', { pushHistory = true } =
   const body = el('side-preview-body');
   if (!pane || !body) return;
 
+  const reqId = ++state.sideReqSeq;
   pane.classList.remove('hidden');
   resizer?.classList.remove('hidden');
   state.sideCurrent = { rawHref, baseDir: baseDir || state.currentBaseDir || '' };
@@ -2353,6 +2747,7 @@ async function openInSidePreview(rawHref, baseDir = '', { pushHistory = true } =
 
   try {
     const info = await fetchFileInfo(rawHref, baseDir);
+    if (reqId !== state.sideReqSeq) return;
     state.sideCurrent = { ...info, rawHref };
     if (pushHistory) {
       state.sideHistory = state.sideHistory.slice(0, state.sideHistoryIdx + 1);
@@ -2373,6 +2768,7 @@ async function openInSidePreview(rawHref, baseDir = '', { pushHistory = true } =
 
     populatePreviewBody(body, info, 'side-code-view');
   } catch (err) {
+    if (reqId !== state.sideReqSeq) return;
     body.innerHTML = `<div class="notice-banner error">${escapeHtml(err.message)}</div>`;
   }
 }
@@ -2790,7 +3186,7 @@ async function manualSync() {
   if (state.mode === 'sessions' && state.activeConvId) {
     await openConversation(state.activeConvId, { scrollToLatestUser: false });
   } else if (state.mode === 'docs' && state.activePreviewId) {
-    await openCustomPreview(state.activePreviewId);
+    await openCustomPreview(state.activePreviewId, { preserveScroll: true });
   }
   if (btn) btn.textContent = t('syncBtn');
 }
@@ -2872,32 +3268,99 @@ async function commitDocRename(docId, newTitle) {
 }
 
 async function loadInitialWorkspaceContent() {
+  const params = new URLSearchParams(window.location.search);
+  const urlConv = params.get('conv') || '';
+  const urlPreview = params.get('preview') || '';
+  const urlMode = params.get('mode') || '';
+  const urlFlavor = params.get('flavor') || '';
+  if (urlFlavor) state.flavor = urlFlavor;
+
   await loadFlavors();
   await Promise.all([loadConversations(), loadCustomPreviews(), loadServerCustomPalettes()]);
 
-  const params = new URLSearchParams(window.location.search);
-  const queryConv = params.get('conv') || (isSidecar ? window.sidecar.conversationId : '');
-  const queryPreview = params.get('preview');
-  const queryMode = params.get('mode');
-  const queryFlavor = params.get('flavor');
-  if (queryFlavor) state.flavor = queryFlavor;
+  let tabMode = '';
+  let tabConv = '';
+  let tabPreview = '';
+  try {
+    tabMode = sessionStorage.getItem('amp-tab-mode') || '';
+    tabConv = sessionStorage.getItem('amp-tab-conv') || '';
+    tabPreview = sessionStorage.getItem('amp-tab-preview') || '';
+  } catch {}
 
-  const savedMode = localStorage.getItem('amp-mode');
-  const savedPreview = localStorage.getItem('amp-last-preview');
+  const sidecarDefaultConv = isSidecar ? (window.sidecar?.conversationId || '') : '';
+  const savedPreview = tabPreview || localStorage.getItem('amp-last-preview') || '';
+  const resolveValidDocId = (preferredId = '') => {
+    if (preferredId && state.customPreviews.some((d) => d.id === preferredId)) return preferredId;
+    if (savedPreview && state.customPreviews.some((d) => d.id === savedPreview)) return savedPreview;
+    return state.customPreviews[0]?.id || '';
+  };
 
-  if (queryPreview && state.customPreviews.some((d) => d.id === queryPreview)) {
-    await openCustomPreview(queryPreview);
-  } else if ((queryMode === 'docs' || (!queryConv && savedMode === 'docs')) && state.customPreviews.length > 0) {
-    const targetDoc = state.customPreviews.some((d) => d.id === savedPreview) ? savedPreview : state.customPreviews[0].id;
-    await openCustomPreview(targetDoc);
-  } else if (queryMode === 'docs') {
-    el('mode-docs-btn')?.click();
-  } else if (queryConv) {
-    await openConversation(queryConv);
-  } else if (state.conversations.length > 0) {
-    await openConversation(state.conversations[0].id);
+  const urlSyncLocked = isSidecar || window.location.protocol === 'plugin:';
+
+  // In Sidecar / plugin: mode where URL query params cannot be updated via replaceState, sessionStorage is authoritative on reload
+  if (urlSyncLocked && tabMode) {
+    if (tabMode === 'docs') {
+      const docId = resolveValidDocId(tabPreview);
+      if (docId) await openCustomPreview(docId);
+      else showEmptyDocsStage();
+      return;
+    }
+    if (tabMode === 'sessions') {
+      const convTarget = tabConv || pickDefaultConversationId();
+      if (convTarget) await openConversation(convTarget);
+      else connectSSE();
+      return;
+    }
+  }
+
+  if (urlPreview) {
+    const docId = resolveValidDocId(urlPreview);
+    if (docId) await openCustomPreview(docId);
+    else showEmptyDocsStage();
+    return;
+  }
+
+  if (urlConv) {
+    await openConversation(urlConv);
+    return;
+  }
+
+  if (urlMode === 'docs') {
+    const docId = resolveValidDocId();
+    if (docId) await openCustomPreview(docId);
+    else showEmptyDocsStage();
+    return;
+  }
+
+  // Preserve active mode/document/session across reloads of the same tab or Sidecar pane
+  if (tabMode === 'docs') {
+    const docId = resolveValidDocId(tabPreview);
+    if (docId) await openCustomPreview(docId);
+    else showEmptyDocsStage();
+    return;
+  }
+  if (tabMode === 'sessions') {
+    const convTarget = (tabConv && state.conversations.some((c) => c.id === tabConv))
+      ? tabConv
+      : (tabConv || pickDefaultConversationId());
+    if (convTarget) {
+      await openConversation(convTarget);
+    } else {
+      connectSSE();
+    }
+    return;
+  }
+
+  if (sidecarDefaultConv) {
+    await openConversation(sidecarDefaultConv);
+    return;
+  }
+
+  const defaultConv = pickDefaultConversationId();
+  if (defaultConv) {
+    await openConversation(defaultConv);
   } else if (state.customPreviews.length > 0) {
-    await openCustomPreview(state.customPreviews[0].id);
+    await openCustomPreview(resolveValidDocId());
   } else {
     connectSSE();
   }
@@ -3027,10 +3490,12 @@ async function bootstrap() {
   });
 
   // Sidebar & Toolbar listeners
-  el('sidebar-toggle-btn')?.addEventListener('click', () => {
+  const toggleSidebar = () => {
     hideDocHoverPopover();
     el('sidebar')?.classList.toggle('collapsed');
-  });
+  };
+  el('sidebar-toggle-btn')?.addEventListener('click', toggleSidebar);
+  el('sidebar-collapse-btn')?.addEventListener('click', toggleSidebar);
 
   el('pin-session-btn')?.addEventListener('click', () => {
     if (state.activeConvId) togglePinSession(state.activeConvId);
@@ -3067,24 +3532,29 @@ async function bootstrap() {
 
   el('mode-sessions-btn')?.addEventListener('click', () => {
     state.mode = 'sessions';
+    persistNavigationState({ mode: 'sessions' });
     updateModeButtons();
     renderSidebarList();
-    if (state.activeConvId) openConversation(state.activeConvId);
+    const targetConv = state.activeConvId || pickDefaultConversationId();
+    if (targetConv) {
+      const keepScroll = Boolean(targetConv === state.activeConvId && state.currentViewData);
+      openConversation(targetConv, { scrollToLatestUser: !keepScroll });
+    } else {
+      ++state.navSeq;
+      syncUrlState({});
+      el('doc-title').textContent = t('selectSession');
+      el('reader-column').innerHTML = `<div class="empty-state"><strong>${escapeHtml(t('readyTitle'))}</strong><span>${t('readyHint')}</span></div>`;
+      renderToc([]);
+      connectSSE();
+    }
   });
 
   el('mode-docs-btn')?.addEventListener('click', () => {
-    state.mode = 'docs';
-    localStorage.setItem('amp-mode', 'docs');
-    updateModeButtons();
-    renderSidebarList();
     const validTarget = state.customPreviews.find((d) => d.id === state.activePreviewId)?.id || state.customPreviews[0]?.id || '';
     if (validTarget) {
       openCustomPreview(validTarget);
     } else {
-      syncUrlState({ mode: 'docs' });
-      el('doc-title').textContent = t('tabDocs');
-      el('reader-column').innerHTML = `<div class="empty-state"><strong>${escapeHtml(t('docsEmptyTitle'))}</strong><span>${t('docsEmptyHint')}</span></div>`;
-      renderToc([]);
+      showEmptyDocsStage();
     }
   });
 
@@ -3111,6 +3581,64 @@ async function bootstrap() {
   el('sidebar-search')?.addEventListener('input', renderSidebarList);
 
   const sessionListEl = el('session-list');
+
+  sessionListEl?.addEventListener('mouseenter', () => {
+    state.sidebarPointerInside = true;
+  });
+  sessionListEl?.addEventListener('mouseleave', () => {
+    state.sidebarPointerInside = false;
+    if (state.sidebarDirtyWhileHovered && !state.sidebarMouseDown && !state.renamingDocId) {
+      renderSidebarList();
+    }
+  });
+  sessionListEl?.addEventListener('mousedown', () => {
+    state.sidebarMouseDown = true;
+  });
+  window.addEventListener('mouseup', () => {
+    if (!state.sidebarMouseDown) return;
+    state.sidebarMouseDown = false;
+    if (!state.sidebarPointerInside && state.sidebarDirtyWhileHovered && !state.renamingDocId) {
+      renderSidebarList();
+    }
+  });
+
+  const toastEl = el('app-toast');
+  toastEl?.addEventListener('mouseenter', () => {
+    toastHoverPaused = true;
+  });
+  toastEl?.addEventListener('mouseleave', () => {
+    toastHoverPaused = false;
+    if ((state.pendingFocusTarget || state.pendingDecisionAlert) && !toastEl.classList.contains('hidden')) {
+      scheduleSwitchToastAutoHide(4200);
+    }
+  });
+  toastEl?.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-toast-dismiss]')) {
+      hideToast();
+      return;
+    }
+    if (e.target.closest('[data-toast-decision]') && state.pendingDecisionAlert) {
+      const alertInfo = state.pendingDecisionAlert;
+      hideToast();
+      if (state.mode === 'sessions' && state.activeConvId === alertInfo.convId) {
+        scrollToDecisionCard(alertInfo.decisionId);
+      } else {
+        await openConversation(alertInfo.convId, { scrollToLatestUser: false });
+        scrollToDecisionCard(alertInfo.decisionId);
+      }
+      return;
+    }
+    if (e.target.closest('[data-toast-switch]') && state.pendingFocusTarget) {
+      const target = state.pendingFocusTarget;
+      hideToast();
+      if (target.previewId) {
+        openCustomPreview(target.previewId);
+      } else if (target.conversationId) {
+        if (target.flavor) state.flavor = target.flavor;
+        openConversation(target.conversationId);
+      }
+    }
+  });
 
   sessionListEl?.addEventListener('mouseover', (e) => {
     if (state.mode !== 'docs' || state.docsManageMode) return;
@@ -3218,11 +3746,17 @@ async function bootstrap() {
       await loadCustomPreviews();
       if (state.activePreviewId === delId) {
         state.activePreviewId = null;
+        try { sessionStorage.removeItem('amp-tab-preview'); } catch {}
         if (state.customPreviews.length > 0) {
           openCustomPreview(state.customPreviews[0].id);
         } else {
+          ++state.navSeq;
           state.currentCustomDoc = null;
+          syncUrlState({ mode: 'docs' });
+          el('doc-title').textContent = t('tabDocs');
           el('reader-column').innerHTML = `<div class="empty-state"><strong>${escapeHtml(t('docRemovedTitle'))}</strong><span>${escapeHtml(t('docRemovedHint'))}</span></div>`;
+          renderToc([]);
+          connectSSE();
         }
       }
       return;
@@ -3750,7 +4284,7 @@ async function bootstrap() {
 
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b') {
       e.preventDefault();
-      el('sidebar')?.classList.toggle('collapsed');
+      toggleSidebar();
       return;
     }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
@@ -3796,7 +4330,8 @@ async function bootstrap() {
       }
       return;
     }
-    if (typing) return;
+    if (typing || document.activeElement?.isContentEditable) return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
 
     const k = e.key.toLowerCase();
     if (k === 'r') { e.preventDefault(); manualSync(); }

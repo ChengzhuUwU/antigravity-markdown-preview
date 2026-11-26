@@ -53,10 +53,14 @@ function summarizeToolGroup(tools) {
   const counts = new Map();
   let errors = 0;
   let running = 0;
+  let waiting = 0;
+  let canceled = 0;
   for (const t of tools) {
     counts.set(t.name, (counts.get(t.name) || 0) + 1);
     if (t.status === 'error') errors++;
-    if (t.status === 'running' || t.status === 'pending') running++;
+    if (t.status === 'waiting') waiting++;
+    else if (t.status === 'canceled') canceled++;
+    else if (t.status === 'running' || t.status === 'pending') running++;
   }
   const parts = Array.from(counts.entries())
     .slice(0, 3)
@@ -66,6 +70,8 @@ function summarizeToolGroup(tools) {
     label: `${tools.length} tool ${tools.length === 1 ? 'call' : 'calls'} · ${parts.join(', ')}`,
     errors,
     running,
+    waiting,
+    canceled,
   };
 }
 
@@ -151,14 +157,22 @@ function buildProcessItemNode(item, { theme, baseDir, expandedState }) {
     card.dataset.disclosureKey = item.id;
 
     const badges = [];
+    if (summary.waiting > 0) badges.push(`<span class="tool-status-pill waiting">waiting</span>`);
     if (summary.running > 0) badges.push(`<span class="tool-status-pill running">running</span>`);
+    if (summary.canceled > 0) badges.push(`<span class="tool-status-pill canceled">${summary.canceled > 1 ? `${summary.canceled} ` : ''}${escapeHtml(t('canceledPill'))}</span>`);
     if (summary.errors > 0) badges.push(`<span class="tool-status-pill error">${summary.errors} failed</span>`);
-    if (summary.running === 0 && summary.errors === 0) badges.push(`<span class="tool-status-pill done">done</span>`);
+    if (summary.waiting === 0 && summary.running === 0 && summary.canceled === 0 && summary.errors === 0) badges.push(`<span class="tool-status-pill done">done</span>`);
 
     const rowsHtml = item.tools.map((tool) => {
       const rowOpen = expandedState.has(tool.id);
       const dur = formatDuration(tool.durationMs);
-      const statusLabel = tool.status === 'error' ? 'error' : (tool.status === 'running' || tool.status === 'pending' ? 'running' : (dur || 'ok'));
+      const statusLabel = tool.status === 'error'
+        ? 'error'
+        : (tool.status === 'waiting'
+            ? 'waiting'
+            : (tool.status === 'canceled'
+                ? t('canceledPill')
+                : (tool.status === 'running' || tool.status === 'pending' ? 'running' : (dur || 'ok'))));
       const showSidebarBtn = Boolean(tool.targetFile && isPreviewableFilePath(tool.targetFile));
       let actionBtnHtml = '';
       if (tool.subagentId) {
@@ -252,7 +266,7 @@ function CHEVON_ICON() {
   return CHEVRON_SVG;
 }
 
-function summarizeProcessItems(processItems, stats, isTurnRunning) {
+function summarizeProcessItems(processItems, stats, isTurnRunning, isTurnInterrupted = false) {
   const parts = [];
   const thoughts = stats?.thinkingCount || 0;
   const tools = stats?.toolCount || 0;
@@ -263,7 +277,9 @@ function summarizeProcessItems(processItems, stats, isTurnRunning) {
   if (parts.length === 0) {
     parts.push(`${processItems.length} ${processItems.length === 1 ? 'step' : 'steps'}`);
   }
-  const prefix = isTurnRunning ? t('workingPrefix') : t('execProcessPrefix');
+  const prefix = isTurnRunning
+    ? t('workingPrefix')
+    : (isTurnInterrupted ? t('interruptedPrefix') : t('execProcessPrefix'));
   return `${prefix} · ${parts.join(' · ')}`;
 }
 
@@ -315,7 +331,7 @@ function processItemSignature(pItem) {
   return `${pItem.kind}:${pItem.id || ''}:${(pItem.text || '').length}`;
 }
 
-function renderPlanStepsCardHtml(planSteps) {
+function renderPlanStepsCardHtml(planSteps, isTurnInterrupted = false) {
   if (!planSteps?.steps?.length) return '';
   const { steps, doneCount = 0, totalCount = steps.length, activeTitle = '' } = planSteps;
   const pct = Math.min(100, Math.round((doneCount / Math.max(1, totalCount)) * 100));
@@ -323,7 +339,9 @@ function renderPlanStepsCardHtml(planSteps) {
 
   const statusPill = allDone
     ? `<span class="tool-status-pill done">✓ ${escapeHtml(t('stepsAllDone'))}</span>`
-    : `<span class="tool-status-pill running">${pct}%</span>`;
+    : (isTurnInterrupted
+        ? `<span class="tool-status-pill canceled">${escapeHtml(t('canceledPill'))} · ${pct}%</span>`
+        : `<span class="tool-status-pill running">${pct}%</span>`);
 
   const rowsHtml = steps.map((st) => {
     const status = st.status || 'pending';
@@ -355,25 +373,217 @@ function renderPlanStepsCardHtml(planSteps) {
   `;
 }
 
-function renderLiveStreamFooterHtml(isTurnRunning, hookState, liveTaskLog, turnRunningSinceMs = 0) {
-  if (!isTurnRunning) return '';
+function splitRecommendedOption(rawOption) {
+  const text = String(rawOption ?? '').trim();
+  const m = text.match(/^\(\s*(?:Recommended|推荐)\s*\)\s*(.*)$/i);
+  if (m) {
+    return { isRecommended: true, label: m[1].trim() || text };
+  }
+  return { isRecommended: false, label: text };
+}
+
+function isDecisionOptionSelected(rawOpt, cleanLabel, answerText) {
+  if (!answerText) return false;
+  const normAns = answerText.trim();
+  const normRaw = String(rawOpt || '').trim();
+  if (!normAns || !normRaw) return false;
+  if (normAns === normRaw || (cleanLabel && normAns === cleanLabel)) return true;
+  return normAns.includes(normRaw) || (cleanLabel && cleanLabel.length >= 6 && normAns.includes(cleanLabel));
+}
+
+function buildDecisionCardElement(item, { baseDir, theme }) {
+  const card = document.createElement('div');
+  const isWaiting = item.status === 'waiting';
+  const isCanceled = item.status === 'canceled';
+  const stateCls = isWaiting ? 'is-waiting' : (isCanceled ? 'is-canceled' : 'is-answered');
+  card.className = `decision-card ${stateCls}`;
+  card.id = item.id;
+  card.dataset.decisionId = item.id;
+
+  const isPlan = item.decisionType === 'approve_plan';
+  const headerTitle = isPlan
+    ? t(isWaiting ? 'decisionPlanTitle' : 'decisionPlanAnsweredTitle')
+    : t(isWaiting ? 'decisionRequiredTitle' : (isCanceled ? 'decisionCanceledTitle' : 'decisionAnsweredTitle'));
+
+  const durStr = !isWaiting && item.durationMs ? formatDuration(item.durationMs) : '';
+  const durBadge = durStr ? `<span class="decision-wait-dur">${escapeHtml(durStr)}</span>` : '';
+  const statusPillHtml = isWaiting
+    ? `<span class="tool-status-pill waiting">${escapeHtml(t('waitingDecisionPhase'))}</span>`
+    : (isCanceled
+        ? `<span class="tool-status-pill error">${escapeHtml(t('decisionCanceledBadge'))}</span>`
+        : `${durBadge}<span class="tool-status-pill done">✓ ${escapeHtml(t('stepsAllDone'))}</span>`);
+
+  const leadIconHtml = isWaiting
+    ? `<span class="status-dot decision-waiting"></span>`
+    : (isCanceled
+        ? `<span class="decision-status-glyph canceled">✕</span>`
+        : `<span class="decision-status-glyph answered">✓</span>`);
+
+  const qList = Array.isArray(item.questions) ? item.questions : [];
+  const countBadge = !isPlan && qList.length > 1
+    ? `<span class="turn-steps-count">${qList.length}</span>`
+    : '';
+
+  const terminalHintHtml = isWaiting
+    ? `<div class="decision-terminal-hint">${escapeHtml(t('decisionTerminalHint'))}</div>`
+    : '';
+
+  let bodyHtml = '';
+  if (isPlan) {
+    const planHtml = item.planMarkdown ? renderMarkdownHtml(item.planMarkdown, { baseDir }) : '';
+    if (isWaiting) {
+      bodyHtml = planHtml
+        ? `<div class="decision-plan-preview assistant-markdown">${planHtml}</div>`
+        : '';
+    } else {
+      const summaryReply = (item.rawAnswer || '').trim();
+      const replyBox = summaryReply
+        ? `<div class="decision-selected-box"><span class="decision-selected-tag">✓</span><span class="decision-selected-val">${escapeHtml(summaryReply)}</span></div>`
+        : '';
+      const planFold = planHtml
+        ? `<details class="decision-options-fold"><summary>${escapeHtml(t('decisionPlanToggle'))}</summary><div class="decision-plan-preview assistant-markdown">${planHtml}</div></details>`
+        : '';
+      bodyHtml = `${replyBox}${planFold}`;
+    }
+  } else {
+    bodyHtml = qList.map((q, idx) => {
+      const qNum = q.index || idx + 1;
+      const modeBadge = `<span class="decision-select-mode">${escapeHtml(t(q.isMultiSelect ? 'decisionMultiSelect' : 'decisionSingleChoice'))}</span>`;
+      const qHeader = `
+        <div class="decision-q-header">
+          <div class="decision-q-title-wrap">
+            ${qList.length > 1 ? `<span class="decision-q-num">Q${qNum}</span>` : ''}
+            <span class="decision-q-text">${escapeHtml(q.question)}</span>
+          </div>
+          ${modeBadge}
+        </div>
+      `;
+
+      const opts = Array.isArray(q.options) ? q.options : [];
+      if (isWaiting) {
+        const optsHtml = opts.map((rawOpt, oIdx) => {
+          const { isRecommended, label } = splitRecommendedOption(rawOpt);
+          return `<div class="decision-option-row ${isRecommended ? 'recommended' : ''}">
+            <span class="decision-opt-idx">${oIdx + 1}</span>
+            <div class="decision-opt-content">
+              ${isRecommended ? `<span class="decision-rec-pill">${escapeHtml(t('decisionRecommendedBadge'))}</span>` : ''}
+              <span>${escapeHtml(label)}</span>
+            </div>
+          </div>`;
+        }).join('');
+        return `<div class="decision-question-block">${qHeader}${optsHtml ? `<div class="decision-options-list">${optsHtml}</div>` : ''}</div>`;
+      }
+
+      const ansText = item.answers?.[qNum] ?? (qList.length === 1 ? (item.rawAnswer || '').trim() : '');
+      const cleanAns = splitRecommendedOption(ansText);
+      const selectedHtml = ansText
+        ? `<div class="decision-selected-box">
+            <span class="decision-selected-tag">✓ ${escapeHtml(t('decisionSelectedLabel'))}</span>
+            <span class="decision-selected-val">
+              ${cleanAns.isRecommended ? `<span class="decision-rec-pill">${escapeHtml(t('decisionRecommendedBadge'))}</span> ` : ''}${escapeHtml(cleanAns.label)}
+            </span>
+          </div>`
+        : (item.errorMsg
+            ? `<div class="notice-banner error" style="padding:6px 10px;font-size:0.78rem;">${escapeHtml(item.errorMsg)}</div>`
+            : '');
+
+      let optionsFoldHtml = '';
+      if (opts.length > 0) {
+        const foldRows = opts.map((rawOpt, oIdx) => {
+          const { isRecommended, label } = splitRecommendedOption(rawOpt);
+          const chosen = isDecisionOptionSelected(rawOpt, label, ansText);
+          return `<div class="decision-option-row compact ${chosen ? 'chosen' : ''}">
+            <span class="decision-opt-idx">${chosen ? '✓' : oIdx + 1}</span>
+            <div class="decision-opt-content">
+              ${isRecommended ? `<span class="decision-rec-pill">${escapeHtml(t('decisionRecommendedBadge'))}</span>` : ''}
+              <span>${escapeHtml(label)}</span>
+            </div>
+          </div>`;
+        }).join('');
+        optionsFoldHtml = `<details class="decision-options-fold">
+          <summary>${escapeHtml(t('decisionShowOptions', { count: opts.length }))}</summary>
+          <div class="decision-options-list">${foldRows}</div>
+        </details>`;
+      }
+
+      return `<div class="decision-question-block">${qHeader}${selectedHtml}${optionsFoldHtml}</div>`;
+    }).join('');
+  }
+
+  card.innerHTML = `
+    <div class="decision-card-header">
+      <div class="decision-card-header-left">
+        ${leadIconHtml}
+        <strong>${escapeHtml(headerTitle)}</strong>
+        ${countBadge}
+      </div>
+      <div class="decision-card-header-right">
+        ${statusPillHtml}
+      </div>
+    </div>
+    ${terminalHintHtml}
+    <div class="decision-card-body">${bodyHtml}</div>
+  `;
+
+  if (isPlan && item.planMarkdown) {
+    card.querySelectorAll('.decision-plan-preview').forEach((node) => enhanceMarkdownDom(node, theme));
+  }
+  return card;
+}
+
+function surfaceItemKey(item) {
+  return item.kind === 'decision' ? item.id : `md-${item.stepIndex}`;
+}
+
+function surfaceItemSignature(item) {
+  if (item.kind === 'decision') {
+    return `dec:${item.id}:${item.status}:${item.durationMs || 0}:${(item.rawAnswer || '').length}:${item.errorMsg || ''}:${getLang()}`;
+  }
+  return `md:${item.stepIndex}:${(item.text || '').length}:${getLang()}`;
+}
+
+function findRunningToolName(turn) {
+  if (!turn?.items) return '';
+  for (let i = turn.items.length - 1; i >= 0; i--) {
+    const it = turn.items[i];
+    if (it.kind === 'tool_group' && Array.isArray(it.tools)) {
+      for (let j = it.tools.length - 1; j >= 0; j--) {
+        const tl = it.tools[j];
+        if (tl.status === 'running' || tl.status === 'pending') return tl.name || '';
+      }
+    }
+  }
+  return '';
+}
+
+function renderLiveStreamFooterHtml(isTurnRunning, hookState, liveTaskLog, turnRunningSinceMs = 0, isWaitingDecision = false, activeToolName = '') {
+  if (!isTurnRunning && !isWaitingDecision) return '';
   let statusText = t('streamingBadge');
-  if (hookState?.phase === 'thinking' || hookState?.phase === 'between_steps') {
-    statusText = t('thinkingPhase');
+  if (isWaitingDecision) {
+    statusText = t('waitingDecisionFooter');
   } else if (hookState?.phase === 'running_tool') {
-    statusText = t('runningToolPhase', { tool: hookState.toolName || 'tool' });
+    statusText = t('runningToolPhase', { tool: hookState.toolName || activeToolName || 'tool' });
+  } else if (hookState?.phase === 'thinking' || hookState?.phase === 'between_steps') {
+    statusText = t('thinkingPhase');
+  } else if (activeToolName) {
+    statusText = t('runningToolPhase', { tool: activeToolName });
+  } else if (liveTaskLog?.text) {
+    statusText = t('runningToolPhase', { tool: 'run_command' });
   }
   const elapsedSec = turnRunningSinceMs > 0 ? Math.max(0, Math.floor((Date.now() - turnRunningSinceMs) / 1000)) : 0;
   const elapsedStr = elapsedSec > 0 ? `${elapsedSec}s` : '';
-  const logHtml = liveTaskLog?.text
+  const logHtml = !isWaitingDecision && liveTaskLog?.text
     ? `<div class="live-task-stream-box">
         <div class="tool-section-label">${escapeHtml(t('liveTaskOutputLabel'))} · ${escapeHtml(liveTaskLog.filename || '')}</div>
         <pre class="tool-pre live-task-stream-pre">${escapeHtml(liveTaskLog.text)}</pre>
       </div>`
     : '';
-  return `<div class="live-stream-footer">
+  const indicatorGraphic = isWaitingDecision
+    ? `<span class="status-dot decision-waiting"></span>`
+    : APPLE_SPINNER_SVG;
+  return `<div class="live-stream-footer${isWaitingDecision ? ' waiting-decision' : ''}">
     <div class="live-stream-indicator">
-      ${APPLE_SPINNER_SVG}
+      ${indicatorGraphic}
       <span>${escapeHtml(statusText)}</span>
       <span class="live-stream-elapsed" data-stream-since="${turnRunningSinceMs || Date.now()}">${escapeHtml(elapsedStr)}</span>
     </div>
@@ -381,13 +591,17 @@ function renderLiveStreamFooterHtml(isTurnRunning, hookState, liveTaskLog, turnR
   </div>`;
 }
 
-function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning, hookState = null, liveTaskLog = null, isLiveUpdate = false, onStreamTick = null, turnRunningSinceMs = 0 }) {
+function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning, isTurnWaitingDecision = false, hookState = null, liveTaskLog = null, isLiveUpdate = false, onStreamTick = null, turnRunningSinceMs = 0 }) {
   const el = document.createElement('section');
   el.className = 'turn-block';
   el.id = turn.id;
   el.dataset.turnId = turn.id;
-  const liveSig = isTurnRunning ? `${hookState?.phase || ''}:${hookState?.toolName || ''}:${liveTaskLog?.size || 0}` : '';
-  el.dataset.signature = `${turnSignature(turn)}:${isTurnRunning ? 'run' : 'done'}:${liveSig}:${baseDir}:${getLang()}`;
+  const isTurnInterrupted = Boolean(turn.interrupted && !isTurnRunning && !isTurnWaitingDecision);
+  const liveSig = (isTurnRunning || isTurnWaitingDecision)
+    ? `${isTurnWaitingDecision ? 'wait' : (hookState?.phase || '')}:${hookState?.toolName || ''}:${liveTaskLog?.size || 0}`
+    : '';
+  const stateTag = isTurnWaitingDecision ? 'wait' : (isTurnRunning ? 'run' : (isTurnInterrupted ? 'canceled' : 'done'));
+  el.dataset.signature = `${turnSignature(turn)}:${stateTag}:${liveSig}:${baseDir}:${getLang()}`;
 
   const promptText = turn.user?.request || '';
   el.dataset.promptPreview = cleanTocSnippet(promptText, 18);
@@ -450,12 +664,12 @@ function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning, 
     }
   }
 
-  // Partition turn items into High-Level Execution Process vs Final Assistant Response
+  // Partition turn items into High-Level Execution Process vs Surface Items (Final Markdown + User Decision Cards)
   const processItems = [];
-  const finalItems = [];
+  const surfaceItems = [];
   for (const item of turn.items) {
-    if (item.kind === 'markdown' && !item.intermediate) {
-      finalItems.push(item);
+    if ((item.kind === 'markdown' && !item.intermediate) || item.kind === 'decision') {
+      surfaceItems.push(item);
     } else {
       processItems.push(item);
     }
@@ -465,8 +679,8 @@ function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning, 
   if (turn.planSteps?.steps?.length > 0) {
     const stepsCard = document.createElement('div');
     stepsCard.className = 'turn-steps-card';
-    stepsCard.dataset.stepsSig = JSON.stringify(turn.planSteps.steps);
-    stepsCard.innerHTML = renderPlanStepsCardHtml(turn.planSteps);
+    stepsCard.dataset.stepsSig = `${JSON.stringify(turn.planSteps.steps)}:${isTurnInterrupted ? '1' : '0'}`;
+    stepsCard.innerHTML = renderPlanStepsCardHtml(turn.planSteps, isTurnInterrupted);
     el.appendChild(stepsCard);
   }
 
@@ -475,14 +689,16 @@ function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning, 
     const procKey = `${turn.id}:process`;
     const procOpen = expandedState.has(procKey);
     const procCard = document.createElement('div');
-    procCard.className = `process-fold-card${isTurnRunning ? ' running' : ''}`;
+    procCard.className = `process-fold-card${isTurnRunning ? ' running' : ''}${isTurnInterrupted ? ' interrupted' : ''}`;
     procCard.dataset.open = String(procOpen);
     procCard.dataset.disclosureKey = procKey;
 
-    const procLabel = summarizeProcessItems(processItems, turn.stats, isTurnRunning);
+    const procLabel = summarizeProcessItems(processItems, turn.stats, isTurnRunning, isTurnInterrupted);
     const errCount = turn.stats?.errorCount || 0;
     const badges = [];
-    if (isTurnRunning) badges.push(`<span class="tool-status-pill running">running</span>`);
+    if (isTurnWaitingDecision) badges.push(`<span class="tool-status-pill waiting">waiting</span>`);
+    else if (isTurnRunning) badges.push(`<span class="tool-status-pill running">running</span>`);
+    else if (isTurnInterrupted) badges.push(`<span class="tool-status-pill canceled">${escapeHtml(t('canceledPill'))}</span>`);
     if (errCount > 0) badges.push(`<span class="tool-status-pill error">${errCount} ${errCount === 1 ? 'error' : 'errors'}</span>`);
 
     procCard.innerHTML = `
@@ -509,21 +725,42 @@ function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning, 
     el.appendChild(procCard);
   }
 
-  // 4. Final Assistant Markdown Responses (always clean and prominently visible)
-  for (let i = 0; i < finalItems.length; i++) {
-    const item = finalItems[i];
-    const mdEl = document.createElement('div');
-    mdEl.className = 'assistant-markdown';
-    mdEl.dataset.stepIndex = String(item.stepIndex);
-    const animateThis = Boolean(isLiveUpdate && i === finalItems.length - 1);
-    streamMarkdownIntoNode(mdEl, item.text, { baseDir, theme, instant: !animateThis, onStreamTick });
-    el.appendChild(mdEl);
+  // 4. Surface Items: User Decision Cards & Final Assistant Markdown Responses in chronological order
+  for (let i = 0; i < surfaceItems.length; i++) {
+    const item = surfaceItems[i];
+    const sKey = surfaceItemKey(item);
+    if (item.kind === 'decision') {
+      const decEl = buildDecisionCardElement(item, { baseDir, theme });
+      decEl.dataset.surfaceKey = sKey;
+      decEl.dataset.surfaceSig = surfaceItemSignature(item);
+      el.appendChild(decEl);
+    } else {
+      const mdEl = document.createElement('div');
+      mdEl.className = 'assistant-markdown';
+      mdEl.dataset.surfaceKey = sKey;
+      mdEl.dataset.stepIndex = String(item.stepIndex);
+      const animateThis = Boolean(isLiveUpdate && i === surfaceItems.length - 1);
+      streamMarkdownIntoNode(mdEl, item.text, { baseDir, theme, instant: !animateThis, onStreamTick });
+      mdEl.dataset.surfaceSig = surfaceItemSignature(item);
+      el.appendChild(mdEl);
+    }
   }
 
-  if (isTurnRunning) {
+  const showInterruptedBanner = isTurnInterrupted
+    && !surfaceItems.some((it) => it.kind === 'markdown')
+    && (turn.stats?.errorCount || 0) === 0;
+  if (showInterruptedBanner) {
+    const intBanner = document.createElement('div');
+    intBanner.className = 'turn-interrupted-banner';
+    intBanner.textContent = t('turnInterruptedNotice');
+    el.appendChild(intBanner);
+  }
+
+  if (isTurnRunning || isTurnWaitingDecision) {
     const streamWrap = document.createElement('div');
     streamWrap.className = 'live-stream-slot';
-    streamWrap.innerHTML = renderLiveStreamFooterHtml(true, hookState, liveTaskLog, turnRunningSinceMs);
+    const activeToolName = findRunningToolName(turn);
+    streamWrap.innerHTML = renderLiveStreamFooterHtml(isTurnRunning, hookState, liveTaskLog, turnRunningSinceMs, isTurnWaitingDecision, activeToolName);
     const pre = streamWrap.querySelector('.live-task-stream-pre');
     if (pre) pre.scrollTop = pre.scrollHeight;
     el.appendChild(streamWrap);
@@ -590,13 +827,14 @@ function patchProcessBodyInPlace(bodyEl, processItems, { theme, baseDir, expande
   }
 }
 
-function patchTurnElementInPlace(existingEl, turn, { theme, baseDir, expandedState, isTurnRunning, hookState, liveTaskLog, sig, isLiveUpdate = false, onStreamTick = null, turnRunningSinceMs = 0 }) {
+function patchTurnElementInPlace(existingEl, turn, { theme, baseDir, expandedState, isTurnRunning, isTurnWaitingDecision = false, hookState, liveTaskLog, sig, isLiveUpdate = false, onStreamTick = null, turnRunningSinceMs = 0 }) {
   existingEl.dataset.signature = sig;
+  const isTurnInterrupted = Boolean(turn.interrupted && !isTurnRunning && !isTurnWaitingDecision);
 
   const processItems = [];
-  const finalItems = [];
+  const surfaceItems = [];
   for (const item of turn.items) {
-    if (item.kind === 'markdown' && !item.intermediate) finalItems.push(item);
+    if ((item.kind === 'markdown' && !item.intermediate) || item.kind === 'decision') surfaceItems.push(item);
     else processItems.push(item);
   }
 
@@ -605,17 +843,17 @@ function patchTurnElementInPlace(existingEl, turn, { theme, baseDir, expandedSta
   // 0. Update or insert Live Plan Steps Checklist card in place
   let stepsCard = existingEl.querySelector(':scope > .turn-steps-card');
   if (turn.planSteps?.steps?.length > 0) {
-    const nextStepsSig = JSON.stringify(turn.planSteps.steps);
+    const nextStepsSig = `${JSON.stringify(turn.planSteps.steps)}:${isTurnInterrupted ? '1' : '0'}`;
     if (!stepsCard) {
       stepsCard = document.createElement('div');
       stepsCard.className = 'turn-steps-card';
       stepsCard.dataset.stepsSig = nextStepsSig;
-      stepsCard.innerHTML = renderPlanStepsCardHtml(turn.planSteps);
+      stepsCard.innerHTML = renderPlanStepsCardHtml(turn.planSteps, isTurnInterrupted);
       if (userAnchor) userAnchor.after(stepsCard);
       else existingEl.prepend(stepsCard);
     } else if (stepsCard.dataset.stepsSig !== nextStepsSig) {
       stepsCard.dataset.stepsSig = nextStepsSig;
-      stepsCard.innerHTML = renderPlanStepsCardHtml(turn.planSteps);
+      stepsCard.innerHTML = renderPlanStepsCardHtml(turn.planSteps, isTurnInterrupted);
     }
   } else if (stepsCard) {
     stepsCard.remove();
@@ -629,15 +867,17 @@ function patchTurnElementInPlace(existingEl, turn, { theme, baseDir, expandedSta
   if (processItems.length > 0) {
     const procKey = `${turn.id}:process`;
     const procOpen = expandedState.has(procKey);
-    const procLabel = summarizeProcessItems(processItems, turn.stats, isTurnRunning);
+    const procLabel = summarizeProcessItems(processItems, turn.stats, isTurnRunning, isTurnInterrupted);
     const errCount = turn.stats?.errorCount || 0;
     const badges = [];
-    if (isTurnRunning) badges.push(`<span class="tool-status-pill running">running</span>`);
+    if (isTurnWaitingDecision) badges.push(`<span class="tool-status-pill waiting">waiting</span>`);
+    else if (isTurnRunning) badges.push(`<span class="tool-status-pill running">running</span>`);
+    else if (isTurnInterrupted) badges.push(`<span class="tool-status-pill canceled">${escapeHtml(t('canceledPill'))}</span>`);
     if (errCount > 0) badges.push(`<span class="tool-status-pill error">${errCount} ${errCount === 1 ? 'error' : 'errors'}</span>`);
 
     if (!procCard) {
       procCard = document.createElement('div');
-      procCard.className = `process-fold-card${isTurnRunning ? ' running' : ''}`;
+      procCard.className = `process-fold-card${isTurnRunning ? ' running' : ''}${isTurnInterrupted ? ' interrupted' : ''}`;
       procCard.dataset.open = String(procOpen);
       procCard.dataset.disclosureKey = procKey;
       procCard.innerHTML = `
@@ -654,6 +894,7 @@ function patchTurnElementInPlace(existingEl, turn, { theme, baseDir, expandedSta
       else existingEl.prepend(procCard);
     } else {
       procCard.classList.toggle('running', Boolean(isTurnRunning));
+      procCard.classList.toggle('interrupted', isTurnInterrupted);
       procCard.dataset.open = String(procOpen);
       const titleEl = procCard.querySelector(':scope > .process-fold-trigger .process-fold-title');
       if (titleEl && titleEl.textContent !== procLabel) titleEl.textContent = procLabel;
@@ -675,47 +916,96 @@ function patchTurnElementInPlace(existingEl, turn, { theme, baseDir, expandedSta
     }
   } else if (procCard) {
     procCard.remove();
+    procCard = null;
   }
 
-  // 2. Incrementally update & progressively stream final Assistant Markdown blocks in place
-  const existingMdByStep = new Map();
-  existingEl.querySelectorAll(':scope > .assistant-markdown[data-step-index]').forEach((node) => {
-    existingMdByStep.set(node.dataset.stepIndex, node);
+  // 2. Incrementally update Surface Items (Decision Cards + Assistant Markdown) in chronological order
+  const existingSurfaceByKey = new Map();
+  existingEl.querySelectorAll(':scope > [data-surface-key]').forEach((node) => {
+    existingSurfaceByKey.set(node.dataset.surfaceKey, node);
   });
 
-  const keepSteps = new Set(finalItems.map((it) => String(it.stepIndex)));
-  for (const [stepKey, node] of existingMdByStep.entries()) {
-    if (!keepSteps.has(stepKey)) node.remove();
+  const keepKeys = new Set(surfaceItems.map(surfaceItemKey));
+  for (const [sKey, node] of existingSurfaceByKey.entries()) {
+    if (!keepKeys.has(sKey)) node.remove();
   }
 
-  const streamSlotBefore = existingEl.querySelector(':scope > .live-stream-slot');
-  for (let i = 0; i < finalItems.length; i++) {
-    const item = finalItems[i];
-    const stepKey = String(item.stepIndex);
-    const nextLen = String((item.text || '').length);
-    let mdEl = existingMdByStep.get(stepKey);
-    const shouldAnimate = Boolean(isLiveUpdate && i === finalItems.length - 1);
-    if (!mdEl) {
-      mdEl = document.createElement('div');
-      mdEl.className = 'assistant-markdown';
-      mdEl.dataset.stepIndex = stepKey;
-      if (streamSlotBefore) existingEl.insertBefore(mdEl, streamSlotBefore);
-      else existingEl.appendChild(mdEl);
-      streamMarkdownIntoNode(mdEl, item.text, { baseDir, theme, instant: !shouldAnimate, onStreamTick });
-    } else if (mdEl.dataset.rawLen !== nextLen) {
-      streamMarkdownIntoNode(mdEl, item.text, { baseDir, theme, instant: !shouldAnimate, onStreamTick });
+  let prevSurfaceAnchor = procCard || anchorBeforeProcess || null;
+  const tailSlotBefore = existingEl.querySelector(':scope > .turn-interrupted-banner') || existingEl.querySelector(':scope > .live-stream-slot');
+
+  const placeAfterAnchor = (node) => {
+    if (prevSurfaceAnchor && prevSurfaceAnchor.parentElement === existingEl) {
+      if (prevSurfaceAnchor.nextElementSibling !== node) {
+        prevSurfaceAnchor.after(node);
+      }
+    } else if (tailSlotBefore) {
+      existingEl.insertBefore(node, tailSlotBefore);
+    } else {
+      existingEl.appendChild(node);
+    }
+    prevSurfaceAnchor = node;
+  };
+
+  for (let i = 0; i < surfaceItems.length; i++) {
+    const item = surfaceItems[i];
+    const sKey = surfaceItemKey(item);
+    const nextSig = surfaceItemSignature(item);
+    let node = existingSurfaceByKey.get(sKey);
+
+    if (item.kind === 'decision') {
+      if (!node || node.dataset.surfaceSig !== nextSig) {
+        const freshDec = buildDecisionCardElement(item, { baseDir, theme });
+        freshDec.dataset.surfaceKey = sKey;
+        freshDec.dataset.surfaceSig = nextSig;
+        if (node) node.replaceWith(freshDec);
+        node = freshDec;
+      }
+      placeAfterAnchor(node);
+    } else {
+      const shouldAnimate = Boolean(isLiveUpdate && i === surfaceItems.length - 1);
+      if (!node) {
+        node = document.createElement('div');
+        node.className = 'assistant-markdown';
+        node.dataset.surfaceKey = sKey;
+        node.dataset.stepIndex = String(item.stepIndex);
+        streamMarkdownIntoNode(node, item.text, { baseDir, theme, instant: !shouldAnimate, onStreamTick });
+        node.dataset.surfaceSig = nextSig;
+      } else if (node.dataset.surfaceSig !== nextSig) {
+        streamMarkdownIntoNode(node, item.text, { baseDir, theme, instant: !shouldAnimate, onStreamTick });
+        node.dataset.surfaceSig = nextSig;
+      }
+      placeAfterAnchor(node);
     }
   }
 
-  // 3. Update live streaming status & active command log tail
+  // 2.8 Update or remove Interrupted Turn notice banner
+  const showInterruptedBanner = isTurnInterrupted
+    && !surfaceItems.some((it) => it.kind === 'markdown')
+    && (turn.stats?.errorCount || 0) === 0;
+  let intBanner = existingEl.querySelector(':scope > .turn-interrupted-banner');
+  if (showInterruptedBanner) {
+    if (!intBanner) {
+      intBanner = document.createElement('div');
+      intBanner.className = 'turn-interrupted-banner';
+      const streamSlotExisting = existingEl.querySelector(':scope > .live-stream-slot');
+      if (streamSlotExisting) existingEl.insertBefore(intBanner, streamSlotExisting);
+      else existingEl.appendChild(intBanner);
+    }
+    intBanner.textContent = t('turnInterruptedNotice');
+  } else if (intBanner) {
+    intBanner.remove();
+  }
+
+  // 3. Update live execution / waiting-decision status & active command log tail
   let streamSlot = existingEl.querySelector(':scope > .live-stream-slot');
-  if (isTurnRunning) {
+  if (isTurnRunning || isTurnWaitingDecision) {
     if (!streamSlot) {
       streamSlot = document.createElement('div');
       streamSlot.className = 'live-stream-slot';
       existingEl.appendChild(streamSlot);
     }
-    streamSlot.innerHTML = renderLiveStreamFooterHtml(true, hookState, liveTaskLog, turnRunningSinceMs);
+    const activeToolName = findRunningToolName(turn);
+    streamSlot.innerHTML = renderLiveStreamFooterHtml(isTurnRunning, hookState, liveTaskLog, turnRunningSinceMs, isTurnWaitingDecision, activeToolName);
     const pre = streamSlot.querySelector('.live-task-stream-pre');
     if (pre) pre.scrollTop = pre.scrollHeight;
   } else if (streamSlot) {
@@ -725,9 +1015,13 @@ function patchTurnElementInPlace(existingEl, turn, { theme, baseDir, expandedSta
 
 function turnSignature(turn) {
   const lastItem = turn.items[turn.items.length - 1];
-  const lastTextLen = lastItem?.text?.length || lastItem?.tools?.length || 0;
+  const lastTextLen = lastItem?.text?.length || lastItem?.tools?.length || (lastItem?.rawAnswer || '').length || 0;
   const stepsSig = turn.planSteps?.steps ? JSON.stringify(turn.planSteps.steps) : '';
-  return `${turn.items.length}:${turn.stats.thinkingCount}:${turn.stats.toolCount}:${turn.stats.errorCount}:${lastTextLen}:${lastItem?.status || ''}:${stepsSig}:${JSON.stringify(lastItem?.tools?.map((t) => `${t.status}:${t.durationMs}`) || [])}`;
+  const decisionsSig = turn.items
+    .filter((it) => it.kind === 'decision')
+    .map((d) => `${d.id}:${d.status}:${(d.rawAnswer || '').length}`)
+    .join(',');
+  return `${turn.items.length}:${turn.interrupted ? 'int' : ''}:${turn.stats.thinkingCount}:${turn.stats.toolCount}:${turn.stats.errorCount}:${lastTextLen}:${lastItem?.status || ''}:${stepsSig}:${decisionsSig}:${JSON.stringify(lastItem?.tools?.map((t) => `${t.status}:${t.durationMs}`) || [])}`;
 }
 
 export function renderCliInsightsHtml(tab, view, cliInsights, artifacts, baseDir) {
@@ -1185,13 +1479,29 @@ export class TranscriptRenderer {
     const visibleTurns = turns.slice(startIdx);
     const lastTurn = turns[turns.length - 1];
 
-    // Track elapsed start time for the actively running turn (NEVER forcibly collapse user-expanded process cards!)
+    const isWaitingSummary = view?.summary?.activeStatus === 'waiting_decision';
+    const isCanceledSummary = view?.summary?.activeStatus === 'canceled';
+    const hookStopped = hookState?.phase === 'stopped';
+
+    // Track elapsed start time for the actively running / waiting-decision turn (NEVER forcibly collapse user-expanded process cards!)
     for (const turn of visibleTurns) {
-      const hasFinalMarkdown = turn.items.some((it) => it.kind === 'markdown' && !it.intermediate);
-      const turnRunning = turn.id === lastTurn?.id && (isRunning || view?.summary?.activeStatus === 'running') && !hasFinalMarkdown;
-      if (turnRunning) {
+      const tailItem = turn.items[turn.items.length - 1];
+      const endedWithFinalReply = Boolean(tailItem?.kind === 'markdown' && !tailItem.intermediate && view?.summary?.activeStatus !== 'running');
+      const turnWaiting = Boolean(turn.id === lastTurn?.id && isWaitingSummary);
+      const turnRunning = Boolean(
+        turn.id === lastTurn?.id &&
+        !turnWaiting &&
+        !isCanceledSummary &&
+        !hookStopped &&
+        (isRunning || view?.summary?.activeStatus === 'running') &&
+        !endedWithFinalReply
+      );
+      if (turnRunning || turnWaiting) {
         if (!this.turnRunningSince.has(turn.id)) {
-          this.turnRunningSince.set(turn.id, hookState?.updatedAt || Date.now());
+          const decCreatedMs = turnWaiting && view?.summary?.pendingDecision?.createdAt
+            ? (Date.parse(view.summary.pendingDecision.createdAt) || Date.now())
+            : 0;
+          this.turnRunningSince.set(turn.id, decCreatedMs || hookState?.updatedAt || Date.now());
         }
       } else {
         this.turnRunningSince.delete(turn.id);
@@ -1290,10 +1600,23 @@ export class TranscriptRenderer {
     }
 
     for (const turn of visibleTurns) {
-      const hasFinalMarkdown = turn.items.some((it) => it.kind === 'markdown' && !it.intermediate);
-      const isTurnRunning = turn.id === lastTurn?.id && (isRunning || view?.summary?.activeStatus === 'running') && !hasFinalMarkdown;
-      const liveSig = isTurnRunning ? `${hookState?.phase || ''}:${hookState?.toolName || ''}:${liveTaskLog?.size || 0}` : '';
-      const sig = `${turnSignature(turn)}:${isTurnRunning ? 'run' : 'done'}:${liveSig}:${this.baseDir}:${getLang()}`;
+      const tailItem = turn.items[turn.items.length - 1];
+      const endedWithFinalReply = Boolean(tailItem?.kind === 'markdown' && !tailItem.intermediate && view?.summary?.activeStatus !== 'running');
+      const isTurnWaitingDecision = Boolean(turn.id === lastTurn?.id && isWaitingSummary);
+      const isTurnRunning = Boolean(
+        turn.id === lastTurn?.id &&
+        !isTurnWaitingDecision &&
+        !isCanceledSummary &&
+        !hookStopped &&
+        (isRunning || view?.summary?.activeStatus === 'running') &&
+        !endedWithFinalReply
+      );
+      const isTurnInterrupted = Boolean(turn.interrupted && !isTurnRunning && !isTurnWaitingDecision);
+      const liveSig = (isTurnRunning || isTurnWaitingDecision)
+        ? `${isTurnWaitingDecision ? 'wait' : (hookState?.phase || '')}:${hookState?.toolName || ''}:${liveTaskLog?.size || 0}`
+        : '';
+      const stateTag = isTurnWaitingDecision ? 'wait' : (isTurnRunning ? 'run' : (isTurnInterrupted ? 'canceled' : 'done'));
+      const sig = `${turnSignature(turn)}:${stateTag}:${liveSig}:${this.baseDir}:${getLang()}`;
       const existing = existingById.get(turn.id);
       if (existing && existing.dataset.signature === sig) {
         continue;
@@ -1306,6 +1629,7 @@ export class TranscriptRenderer {
           baseDir: this.baseDir,
           expandedState: this.expandedState,
           isTurnRunning,
+          isTurnWaitingDecision,
           hookState,
           liveTaskLog,
           sig,
@@ -1319,6 +1643,7 @@ export class TranscriptRenderer {
           baseDir: this.baseDir,
           expandedState: this.expandedState,
           isTurnRunning,
+          isTurnWaitingDecision,
           hookState,
           liveTaskLog,
           isLiveUpdate: animateTurn,

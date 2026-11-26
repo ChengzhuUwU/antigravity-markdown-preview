@@ -14,7 +14,7 @@ Transform dense terminal streams, 1,000+ step agent trajectories, LaTeX math, wi
   - Secure remote or shared server deployments (`--host 0.0.0.0`) via `agy-preview password <set | cancel | disable | activate | print>` or `/preview password ...`, backed by `HttpOnly` HMAC-signed session cookies and rate-limited login.
 - **Auto-Folded Execution, Live Steps Checklist & Three-State Session Status**:
   - Star (`☆ / ★`) important conversations in the Preview topbar to keep them in a dedicated **`★ Pinned`** shelf above all workspace projects, and collapse or expand all project folders with a single **`⊟ Collapse / ⊞ Expand`** toggle.
-  - **Calm Three-State Session Indicators**: neutral Apple-style 12-spoke activity spinner while a session or project is actively running, accent highlight dot + **`Unread`** badge only when a background session finishes with unread updates, and minimal muted dot once read.
+  - **Calm Session & Decision Indicators**: neutral Apple-style 12-spoke activity spinner while a session is running (with live command output tailing), **`⏳ Awaiting Decision`** alerts + inline `ask_question` / `exit_plan_mode` option cards when CLI awaits your input, clean **`interrupted`** state when a turn is canceled, and accent **`Unread`** highlight when a background session completes.
   - Renders live `update_steps` progress checklists above each turn's **`Execution process`** fold without collapsing open inspection cards mid-turn, and jumps straight to your **latest user prompt** on open.
   - Full-text search across project names, session titles, and **all historical user prompts** (powered by `node:sqlite` FTS5).
 - **Built-in `/btw` · `/context` · `/usage` Inspector**:
@@ -82,8 +82,8 @@ agy plugin list
 # Open or focus the standalone desktop preview window
 agy-preview
 
-# Preview a specific conversation ID
-agy-preview --conv <CONVERSATION_ID>
+# Preview a specific conversation ID (add --focus to switch an already-open window immediately)
+agy-preview --conv <CONVERSATION_ID> --focus
 
 # Preview and live-watch any local Markdown or JSONL file
 agy-preview README.md
@@ -91,8 +91,9 @@ agy-preview README.md
 # Pipe `agy -p --output-format stream-json` directly into the previewer
 agy -p "Audit this module" --output-format stream-json | agy-preview --stdin
 
-# Check background server status or stop it
+# Check background server status, restart in-place, or stop it
 agy-preview --status
+agy-preview --restart
 agy-preview --stop
 
 # Manage optional frontend password (for remote servers, disabled by default)

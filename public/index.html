@@ -17,8 +17,10 @@
       <div class="sidebar-top">
         <div class="brand-row">
           <div class="brand-mark">
-            <span class="brand-dot">S</span>
-            <span data-i18n="brandTitle">Session Preview</span>
+            <button id="sidebar-collapse-btn" class="icon-btn sidebar-toggle-icon-btn" type="button" data-i18n-title="collapseSidebarTip" title="Collapse Sidebar (Ctrl+B)" aria-label="Collapse Sidebar">
+              <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><rect x="1.75" y="2.25" width="12.5" height="11.5" rx="2.2"/><path d="M6 2.5v11M11.25 6.25L9.25 8l2 1.75"/></svg>
+            </button>
+            <span class="brand-title-text" data-i18n="brandTitle">Session Preview</span>
           </div>
           <button id="paste-open-btn" class="pill-btn" data-i18n="openPasteBtn" data-i18n-title="openPasteTip" title="Open local file or paste Markdown / CLI output (P)">+ Open / Paste</button>
         </div>
@@ -56,7 +58,9 @@
     <main class="main-workspace">
       <header class="topbar">
         <div class="topbar-left">
-          <button id="sidebar-toggle-btn" class="icon-btn" title="Toggle Sidebar (Ctrl+B)" aria-label="Toggle Sidebar">☰</button>
+          <button id="sidebar-toggle-btn" class="icon-btn sidebar-toggle-icon-btn" type="button" data-i18n-title="expandSidebarTip" title="Expand Sidebar (Ctrl+B)" aria-label="Expand Sidebar">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><rect x="1.75" y="2.25" width="12.5" height="11.5" rx="2.2"/><path d="M6 2.5v11M9.25 6.25L11.25 8l-2 1.75"/></svg>
+          </button>
           <button id="pin-session-btn" class="icon-btn star-pin-btn hidden" type="button" data-i18n-title="pinSessionTip" title="Star to pin session above projects">☆</button>
           <span id="doc-title" class="doc-title" data-i18n="selectSession">Select a session</span>
           <span id="live-pill" class="live-pill" data-i18n="connecting">Connecting…</span>

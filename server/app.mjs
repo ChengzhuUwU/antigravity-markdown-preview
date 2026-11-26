@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import {
   TranscriptReader,
   detectFlavors,
+  getConversationRunState,
   getGeminiRoot,
   getRollingUsageStats,
   listArtifacts,
@@ -489,7 +490,7 @@ function readActiveTaskLogTail(convDir) {
         const full = join(tasksDir, name);
         try {
           const st = statSync(full);
-          if (!st.isFile() || st.size === 0 || now - st.mtimeMs > 18000) continue;
+          if (!st.isFile() || st.size === 0 || now - st.mtimeMs > 25000) continue;
           if (!newest || st.mtimeMs > newest.mtimeMs) {
             newest = { name, full, size: st.size, mtimeMs: st.mtimeMs };
           }
@@ -510,7 +511,7 @@ function readActiveTaskLogTail(convDir) {
         if (!existsSync(outFile)) continue;
         try {
           const st = statSync(outFile);
-          if (!st.isFile() || st.size === 0 || now - st.mtimeMs > 12000) continue;
+          if (!st.isFile() || st.size === 0 || now - st.mtimeMs > 25000) continue;
           if (!newest || st.mtimeMs > newest.mtimeMs) {
             newest = { name: `step-${sd}/output.txt`, full: outFile, size: st.size, mtimeMs: st.mtimeMs };
           }
@@ -521,7 +522,7 @@ function readActiveTaskLogTail(convDir) {
 
   if (!newest) return null;
   try {
-    const maxBytes = 3200;
+    const maxBytes = 6400;
     const readLen = Math.min(newest.size, maxBytes);
     const startOffset = newest.size - readLen;
     const buf = Buffer.alloc(readLen);
@@ -662,6 +663,7 @@ export function createPreviewEngine({
   const watchers = new Map();
   const liveHookStates = new Map();
   const liveConvRuntime = new Map(); // convId -> { stepCount, activeStatus, updatedAt }
+  const runStateCache = new Map(); // `${flavor}:${convId}` -> { checkedAt, state }
   const serverBootId = `${process.pid}-${Date.now()}`;
 
   function isHookPhaseRunning(hs) {
@@ -672,6 +674,57 @@ export function createPreviewEngine({
     return hs.phase === 'thinking' || hs.phase === 'running_tool' || hs.phase === 'tool_done' || hs.phase === 'between_steps';
   }
 
+  function getCachedRunState(convId, flavor = 'antigravity-cli') {
+    const key = `${flavor || 'antigravity-cli'}:${convId}`;
+    const now = Date.now();
+    const cached = runStateCache.get(key);
+    if (cached && now - cached.checkedAt < 850) {
+      return cached.state;
+    }
+    const state = getConversationRunState(convId, flavor || 'antigravity-cli');
+    runStateCache.set(key, { checkedAt: now, state });
+    if (runStateCache.size > 128) {
+      const oldest = runStateCache.keys().next().value;
+      runStateCache.delete(oldest);
+    }
+    return state;
+  }
+
+  function invalidateRunStateCache(convId = '', flavor = '') {
+    if (!convId && !flavor) {
+      runStateCache.clear();
+      return;
+    }
+    for (const k of runStateCache.keys()) {
+      if ((convId && k.endsWith(`:${convId}`)) || (flavor && k.startsWith(`${flavor}:`))) {
+        runStateCache.delete(k);
+      }
+    }
+  }
+
+  function computeRuntimeReadOpts(convId, flavor, tPathMtimeMs, taskTail) {
+    const hs = liveHookStates.get(convId) || null;
+    const hookRunning = isHookPhaseRunning(hs);
+    const hookStopped = Boolean(
+      hs &&
+      hs.phase === 'stopped' &&
+      (hs.updatedAt || 0) >= (tPathMtimeMs || 0) - 2000
+    );
+    const userCanceled = Boolean(hookStopped && hs.terminationReason === 'USER_CANCELED');
+    let dbConfirmedIdle = false;
+    if (!hookStopped && !hookRunning && !taskTail && tPathMtimeMs > 0 && Date.now() - tPathMtimeMs > 2500) {
+      const dbState = getCachedRunState(convId, flavor || 'antigravity-cli');
+      if (dbState.found && !dbState.active) {
+        dbConfirmedIdle = true;
+      }
+    }
+    return {
+      sessionStopped: hookStopped || dbConfirmedIdle,
+      userCanceled,
+      hasActiveTaskLog: Boolean(taskTail),
+    };
+  }
+
   function enrichConversationsWithLiveState(convs) {
     const now = Date.now();
     const enriched = convs.map((c) => {
@@ -679,13 +732,30 @@ export function createPreviewEngine({
       const rt = liveConvRuntime.get(c.id) || null;
       const hookActive = isHookPhaseRunning(hs);
       const hookRecentlyStopped = Boolean(hs && hs.phase === 'stopped' && now - (hs.updatedAt || 0) < 15000);
-      const rtActive = Boolean(rt && rt.activeStatus === 'running' && now - (rt.updatedAt || 0) < 45000);
-      const active = hookActive || rtActive || (c.active && !hookRecentlyStopped);
+      const rtStopped = Boolean(
+        rt &&
+        (rt.activeStatus === 'canceled' || rt.activeStatus === 'idle') &&
+        (rt.updatedAt || 0) >= (c.updatedAt || 0)
+      );
+      const rtActive = Boolean(
+        rt &&
+        (rt.activeStatus === 'running' || rt.activeStatus === 'waiting_decision') &&
+        now - (rt.updatedAt || 0) < (rt.activeStatus === 'waiting_decision' ? 3600000 : 45000)
+      );
+      const active = hookActive || rtActive || (c.active && !hookRecentlyStopped && !rtStopped);
+      const waitingDecision = hookRecentlyStopped
+        ? null
+        : (rt?.activeStatus === 'waiting_decision'
+            ? rt.pendingDecision
+            : (rt && rt.activeStatus && rt.activeStatus !== 'waiting_decision' && (rt.updatedAt || 0) >= (c.updatedAt || 0)
+                ? null
+                : (c.waitingDecision || null)));
       const stepCount = Math.max(c.stepCount || 0, rt?.stepCount || 0);
       const updatedAt = Math.max(c.updatedAt || 0, hs?.updatedAt || 0, rt?.updatedAt || 0);
       return {
         ...c,
         active,
+        waitingDecision,
         stepCount,
         updatedAt,
         hookState: hs && now - (hs.updatedAt || 0) < 90000 ? hs : null,
@@ -717,7 +787,10 @@ export function createPreviewEngine({
       let timer = null;
       const emitUpdate = () => {
         try {
-          const { view, updatedAt } = reader.read(tPath);
+          const st = existsSync(tPath) ? statSync(tPath) : null;
+          const taskTail = readActiveTaskLogTail(resolved.dir);
+          const readOpts = computeRuntimeReadOpts(convId, resolved.flavor, st?.mtimeMs || 0, taskTail);
+          const { view, updatedAt } = reader.read(tPath, readOpts);
           broadcastEvent(
             'transcript',
             {
@@ -726,6 +799,7 @@ export function createPreviewEngine({
               updatedAt,
               view,
               hookState: liveHookStates.get(convId) || null,
+              liveTaskLog: taskTail,
             },
             (c) => !c.convId || c.convId === convId
           );
@@ -812,6 +886,7 @@ export function createPreviewEngine({
         const hookState = liveHookStates.get(convId) || null;
         const taskTail = readActiveTaskLogTail(resolved.dir);
         const taskSig = taskTail ? `${taskTail.filename}:${taskTail.size}` : '';
+        const readOpts = computeRuntimeReadOpts(convId, resolved.flavor, st.mtimeMs, taskTail);
 
         const prev = streamSnapshots.get(convId);
         if (
@@ -819,17 +894,27 @@ export function createPreviewEngine({
           prev.tPath === tPath &&
           prev.size === st.size &&
           prev.mtimeMs === st.mtimeMs &&
-          prev.taskSig === taskSig
+          prev.taskSig === taskSig &&
+          prev.sessionStopped === readOpts.sessionStopped &&
+          prev.userCanceled === readOpts.userCanceled
         ) {
           continue;
         }
 
-        streamSnapshots.set(convId, { tPath, size: st.size, mtimeMs: st.mtimeMs, taskSig });
-        const { view, updatedAt } = reader.read(tPath);
-        const mergedUpdatedAt = Math.max(updatedAt, taskTail?.updatedAt || 0);
+        streamSnapshots.set(convId, {
+          tPath,
+          size: st.size,
+          mtimeMs: st.mtimeMs,
+          taskSig,
+          sessionStopped: readOpts.sessionStopped,
+          userCanceled: readOpts.userCanceled,
+        });
+        const { view, updatedAt } = reader.read(tPath, readOpts);
+        const mergedUpdatedAt = Math.max(updatedAt, taskTail?.updatedAt || 0, readOpts.sessionStopped ? Date.now() : 0);
         liveConvRuntime.set(convId, {
           stepCount: view?.summary?.totalSteps || 0,
           activeStatus: view?.summary?.activeStatus || 'idle',
+          pendingDecision: view?.summary?.pendingDecision || null,
           updatedAt: mergedUpdatedAt,
         });
         broadcastEvent(
@@ -863,6 +948,7 @@ export function createPreviewEngine({
           const nextDbSig = sigParts.join('|');
           const prevDbSig = dbMtimeSnapshots.get(flavor);
           if (prevDbSig !== undefined && nextDbSig !== prevDbSig) {
+            invalidateRunStateCache('', flavor);
             broadcastEvent('conversations-updated', { flavor, updatedAt: Date.now() });
           }
           dbMtimeSnapshots.set(flavor, nextDbSig);
@@ -1028,7 +1114,13 @@ export function createPreviewEngine({
         return sendJson(res, 404, { error: `Conversation not found: ${convId}` });
       }
       const tPath = resolveTranscriptPath(resolved.dir);
-      const { view, updatedAt } = reader.read(tPath);
+      const liveTaskLog = readActiveTaskLogTail(resolved.dir);
+      let tStat = null;
+      if (tPath && existsSync(tPath)) {
+        try { tStat = statSync(tPath); } catch {}
+      }
+      const readOpts = computeRuntimeReadOpts(convId, resolved.flavor, tStat?.mtimeMs || 0, liveTaskLog);
+      const { view, updatedAt } = reader.read(tPath, readOpts);
       const artifacts = listArtifacts(resolved.dir);
       const allConvs = listConversations(resolved.flavor, 1000);
       const catalogEntry = allConvs.find((c) => c.id === convId);
@@ -1038,17 +1130,21 @@ export function createPreviewEngine({
         : null;
       loadBtwNotesFromDisk();
       ensureTranscriptWatch(convId, resolved.flavor);
-      const liveTaskLog = readActiveTaskLogTail(resolved.dir);
-      if (tPath && existsSync(tPath)) {
-        try {
-          const st = statSync(tPath);
-          streamSnapshots.set(convId, {
-            tPath,
-            size: st.size,
-            mtimeMs: st.mtimeMs,
-            taskSig: liveTaskLog ? `${liveTaskLog.filename}:${liveTaskLog.size}` : '',
-          });
-        } catch {}
+      liveConvRuntime.set(convId, {
+        stepCount: view?.summary?.totalSteps || 0,
+        activeStatus: view?.summary?.activeStatus || 'idle',
+        pendingDecision: view?.summary?.pendingDecision || null,
+        updatedAt: Math.max(updatedAt, liveTaskLog?.updatedAt || 0),
+      });
+      if (tPath && tStat) {
+        streamSnapshots.set(convId, {
+          tPath,
+          size: tStat.size,
+          mtimeMs: tStat.mtimeMs,
+          taskSig: liveTaskLog ? `${liveTaskLog.filename}:${liveTaskLog.size}` : '',
+          sessionStopped: readOpts.sessionStopped,
+          userCanceled: readOpts.userCanceled,
+        });
       }
       return sendJson(res, 200, {
         conversationId: convId,
@@ -1505,24 +1601,39 @@ export function createPreviewEngine({
             phase,
             hookEventName,
             toolName,
+            terminationReason: payload.terminationReason || '',
             error: payload.error || '',
             updatedAt: Date.now(),
           };
+          invalidateRunStateCache(convId);
           liveHookStates.set(convId, hookState);
           broadcastEvent('hook', { conversationId: convId, hookState });
 
           const resolved = resolveConversationDir(convId);
           const tPath = payload.transcriptPath || (resolved ? resolveTranscriptPath(resolved.dir) : null);
           if (tPath && existsSync(tPath)) {
-            const { view, updatedAt } = reader.read(tPath);
+            const st = statSync(tPath);
+            const taskTail = resolved ? readActiveTaskLogTail(resolved.dir) : null;
+            const flavor = resolved?.flavor || 'antigravity-cli';
+            const readOpts = computeRuntimeReadOpts(convId, flavor, st.mtimeMs, taskTail);
+            const { view, updatedAt } = reader.read(tPath, readOpts);
+            streamSnapshots.set(convId, {
+              tPath,
+              size: st.size,
+              mtimeMs: st.mtimeMs,
+              taskSig: taskTail ? `${taskTail.filename}:${taskTail.size}` : '',
+              sessionStopped: readOpts.sessionStopped,
+              userCanceled: readOpts.userCanceled,
+            });
             liveConvRuntime.set(convId, {
               stepCount: view?.summary?.totalSteps || 0,
               activeStatus: view?.summary?.activeStatus || 'idle',
+              pendingDecision: view?.summary?.pendingDecision || null,
               updatedAt: Math.max(updatedAt, hookState.updatedAt),
             });
             broadcastEvent(
               'transcript',
-              { conversationId: convId, flavor: resolved?.flavor || 'antigravity-cli', updatedAt, view, hookState },
+              { conversationId: convId, flavor, updatedAt, view, hookState, liveTaskLog: taskTail },
               (c) => !c.convId || c.convId === convId
             );
           }
@@ -1540,8 +1651,21 @@ export function createPreviewEngine({
           const launched = spawnAppWindow(body.url);
           return sendJson(res, 200, { ok: true, window: launched, clients: sseClients.size });
         }
-        broadcastEvent('focus', body);
-        return sendJson(res, 200, { ok: true, clients: sseClients.size });
+        let resolvedTitle = typeof body.title === 'string' ? body.title.trim() : '';
+        if (!resolvedTitle && body.previewId) {
+          resolvedTitle = customStore.get(body.previewId)?.title || '';
+        } else if (!resolvedTitle && body.conversationId) {
+          const flv = body.flavor || 'antigravity-cli';
+          const found = listConversations(flv, 400).find((c) => c.id === body.conversationId);
+          resolvedTitle = found?.title || `Session ${String(body.conversationId).slice(0, 8)}`;
+        }
+        const focusEvent = {
+          ...body,
+          title: resolvedTitle,
+          force: Boolean(body.force),
+        };
+        broadcastEvent('focus', focusEvent);
+        return sendJson(res, 200, { ok: true, clients: sseClients.size, focus: focusEvent });
       } catch (err) {
         return sendJson(res, 400, { error: err.message });
       }

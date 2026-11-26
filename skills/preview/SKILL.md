@@ -39,7 +39,7 @@ If the user invokes `/preview password ...` (or asks in natural language to **se
 ## Step 3: Launch or Focus via `agy-preview`
 
 1. First check `agy-preview --status`.
-   - **If `running: true`**: run `agy-preview --conv "<CONVERSATION_ID>" --open` (or `agy-preview --file "<FILE_PATH>" --open`) with `IsDaemon: false` — this reuses the existing `agy-preview` server (preserving full native OS File Explorer permissions) and focuses/opens the window immediately.
+   - **If `running: true`**: run `agy-preview --conv "<CONVERSATION_ID>" --open` (or `agy-preview --file "<FILE_PATH>" --open`; add `--focus` only if the user explicitly asked to switch an already-open preview window immediately) with `IsDaemon: false` — this reuses the existing `agy-preview` server (preserving full native OS File Explorer permissions) and notifies or opens the window without hijacking another active document/session.
    - **If `running: false`**: call `run_command` with **`IsDaemon: true`** and **`WaitMsBeforeAsync: 3000`** using `agy-preview --foreground`:
 
 ### Case A — Preview the current (or specific) Antigravity conversation

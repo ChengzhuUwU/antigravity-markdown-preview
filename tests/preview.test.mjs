@@ -24,8 +24,10 @@ import {
   computeAdaptiveInlineMermaidSize,
   isCodeFilePath,
   isPreviewableFilePath,
+  outlineLeadLabel,
   renderMarkdownHtml,
 } from '../public/js/markdown.js';
+import { formatPromptPlainText, formatResponsePlainText, formatTurnPlainText, isLongUserPrompt } from '../public/js/transcript-view.js';
 import { execFileSync } from 'node:child_process';
 
 test('unquoteToolArg and normalizeToolArgs handle JSON-quoted and plain strings', () => {
@@ -1216,4 +1218,55 @@ test('Interrupted turns mark unexecuted queued tools as canceled, invalidate Tra
     ['done', 'done', 'done', 'canceled', 'canceled']
   );
   assert.equal(Boolean(continuedView.turns[1].interrupted), false);
+});
+
+test('outlineLeadLabel uses the opening words when prose has no heading', () => {
+  assert.equal(outlineLeadLabel(''), '');
+  assert.equal(outlineLeadLabel('   '), '');
+  assert.equal(outlineLeadLabel('Ship it'), 'Ship it');
+  assert.equal(outlineLeadLabel('发布完成。'), '发布完成');
+
+  const chinese = outlineLeadLabel('已完成本版本同步、提交推送与 v0.4.1 Release 发布：后续还有说明');
+  assert.equal(chinese, '已完成本版本同步、提交推送与…');
+
+  const english = outlineLeadLabel('Please review the navigation fallback for unstructured replies today');
+  assert.equal(english, 'Please review the navigation…');
+});
+
+test('formatTurnPlainText copies the user request and final model reply, and long prompts fold', () => {
+  assert.equal(isLongUserPrompt('短问题'), false);
+  assert.equal(isLongUserPrompt('x'.repeat(223)), false);
+  assert.equal(isLongUserPrompt('line\n'.repeat(76)), true);
+  assert.equal(isLongUserPrompt('x'.repeat(500)), true);
+
+  const text = formatTurnPlainText({
+    index: 9,
+    user: { request: '第一行\n第二行' },
+    items: [
+      { kind: 'markdown', intermediate: true, text: 'intermediate tool chatter' },
+      { kind: 'markdown', intermediate: false, text: '最终回复' },
+      {
+        kind: 'decision',
+        decisionType: 'ask_question',
+        questions: [{ question: '继续吗？', options: ['是', '否'] }],
+        rawAnswer: '',
+      },
+    ],
+  }, { userLabel: 'You · Turn #9', modelLabel: 'Assistant' });
+
+  assert.match(text, /^You · Turn #9\n\n第一行\n第二行/);
+  assert.equal(text.includes('intermediate tool chatter'), false);
+  assert.match(text, /Assistant\n\n最终回复/);
+  assert.match(text, /继续吗？\n- 是\n- 否/);
+
+  const turn = {
+    user: { request: '第一行\n第二行' },
+    items: [
+      { kind: 'markdown', intermediate: true, text: 'intermediate tool chatter' },
+      { kind: 'markdown', intermediate: false, text: '最终回复' },
+    ],
+  };
+  assert.equal(formatPromptPlainText(turn), '第一行\n第二行');
+  assert.equal(formatResponsePlainText(turn), '最终回复');
+  assert.equal(formatResponsePlainText({ user: { request: 'only prompt' }, items: [] }), '');
 });

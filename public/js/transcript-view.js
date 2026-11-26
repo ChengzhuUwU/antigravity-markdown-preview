@@ -1,5 +1,5 @@
 import { getLang, t } from './i18n.js';
-import { escapeHtml, isPreviewableFilePath, renderMarkdownHtml, enhanceMarkdownDom } from './markdown.js';
+import { escapeHtml, isPreviewableFilePath, outlineLeadLabel, renderMarkdownHtml, enhanceMarkdownDom } from './markdown.js';
 import { APPLE_SPINNER_SVG } from './doc-viewers.js';
 
 const CHEVRON_SVG = `<svg class="chevron-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3.5L10.5 8 6 12.5"/></svg>`;
@@ -18,6 +18,113 @@ function formatDuration(ms) {
   return `${sec}s`;
 }
 
+const LONG_PROMPT_LINES = 8;
+const LONG_PROMPT_CHARS = 480;
+
+export function isLongUserPrompt(text) {
+  const value = String(text || '');
+  if (!value.trim()) return false;
+  const lines = value.split(/\r?\n/).length;
+  return lines > LONG_PROMPT_LINES || value.length > LONG_PROMPT_CHARS;
+}
+
+function collectModelPlainParts(turn) {
+  const parts = [];
+  for (const item of turn?.items || []) {
+    if (item.kind === 'markdown' && !item.intermediate) {
+      const text = String(item.text || '').trim();
+      if (text) parts.push(text);
+    } else if (item.kind === 'decision') {
+      const plan = String(item.planMarkdown || '').trim();
+      if (plan) parts.push(plan);
+      const questions = Array.isArray(item.questions) ? item.questions : [];
+      const block = questions.map((q) => {
+        const options = Array.isArray(q.options) ? q.options.filter(Boolean) : [];
+        const opts = options.length ? `\n${options.map((opt) => `- ${opt}`).join('\n')}` : '';
+        return `${q.question || ''}${opts}`.trim();
+      }).filter(Boolean).join('\n\n');
+      if (block) parts.push(block);
+      const answer = String(item.rawAnswer || '').trim();
+      if (answer) parts.push(answer);
+    }
+  }
+  return parts;
+}
+
+export function formatPromptPlainText(turn) {
+  return String(turn?.user?.request || '').trim();
+}
+
+export function formatResponsePlainText(turn) {
+  return collectModelPlainParts(turn).join('\n\n');
+}
+
+/** Plain-text transcript of one turn: user request plus the visible model reply. */
+export function formatTurnPlainText(turn, labels = {}) {
+  const userLabel = labels.userLabel || 'User';
+  const modelLabel = labels.modelLabel || 'Assistant';
+  const request = formatPromptPlainText(turn);
+  const response = formatResponsePlainText(turn);
+  const blocks = [userLabel];
+  if (request) blocks.push(request);
+  if (response) {
+    blocks.push(modelLabel);
+    blocks.push(response);
+  }
+  return blocks.join('\n\n');
+}
+
+function copyWithTextarea(text) {
+  const area = document.createElement('textarea');
+  area.value = text;
+  area.setAttribute('readonly', '');
+  area.style.position = 'fixed';
+  area.style.top = '0';
+  area.style.left = '0';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.focus();
+  area.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { ok = false; }
+  area.remove();
+  return ok;
+}
+
+async function writeClipboardText(text) {
+  // Must run before the first await so the click gesture can still drive copy.
+  if (copyWithTextarea(text)) return true;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function syncCopyButton(btn, label, tip, text) {
+  if (!btn) return;
+  btn.title = tip;
+  btn.hidden = !text;
+  if (!btn.dataset.busy) btn.textContent = label;
+}
+
+function rememberTurnCopy(turnEl, turn) {
+  if (!turnEl) return;
+  turnEl._copyPromptText = formatPromptPlainText(turn);
+  turnEl._copyResponseText = formatResponsePlainText(turn);
+  const card = turnEl.querySelector(':scope > .user-card');
+  syncCopyButton(card?.querySelector('[data-action="copy-prompt"]'), t('copyPromptBtn'), t('copyPromptTip'), turnEl._copyPromptText);
+  syncCopyButton(card?.querySelector('[data-action="copy-response"]'), t('copyResponseBtn'), t('copyResponseTip'), turnEl._copyResponseText);
+  const badge = turnEl.querySelector(':scope > .user-card .user-badge');
+  if (badge && turn?.index != null) badge.textContent = t('youTurnBadge', { index: turn.index });
+  const foldBtn = turnEl.querySelector(':scope > .user-card [data-action="toggle-user-prompt"]');
+  if (foldBtn) {
+    const open = turnEl.querySelector(':scope > .user-card')?.dataset.promptOpen === 'true';
+    foldBtn.textContent = open ? t('showLessPrompt') : t('showMorePrompt');
+  }
+}
+
 function cleanTocSnippet(text, maxChars = 16) {
   if (!text || typeof text !== 'string') return '';
   const singleLine = text
@@ -27,6 +134,80 @@ function cleanTocSnippet(text, maxChars = 16) {
     .trim();
   if (!singleLine) return '';
   return singleLine.length > maxChars ? `${singleLine.slice(0, maxChars)}…` : singleLine;
+}
+
+function plainNodeText(node) {
+  if (!node) return '';
+  const clone = node.cloneNode(true);
+  clone.querySelectorAll('button, .open-sidebar-pill, .katex-mathml, script, style, svg').forEach((n) => n.remove());
+  return (clone.textContent || '').replace(/\s+/g, ' ').trim();
+}
+
+function readableOutlineSource(root) {
+  if (!root) return '';
+  const nodes = root.querySelectorAll('p, li, blockquote, td, th');
+  for (const node of nodes) {
+    if (node.closest('details, .thinking-body, pre, svg, .mermaid')) continue;
+    const text = plainNodeText(node);
+    if (text) return text;
+  }
+  const pre = root.querySelector('pre');
+  if (pre && !pre.closest('details, .thinking-body')) {
+    const text = plainNodeText(pre);
+    if (text) return text;
+  }
+  if (root.closest && root.querySelector('details, .thinking-body')) {
+    const clone = root.cloneNode(true);
+    clone.querySelectorAll('details, .thinking-body').forEach((n) => n.remove());
+    return plainNodeText(clone);
+  }
+  return plainNodeText(root);
+}
+
+function assignOutlineAnchor(el, preferred, seenIds) {
+  let id = el.id && !seenIds.has(el.id) ? el.id : (preferred || 'md-lead');
+  let unique = id;
+  let n = 2;
+  const taken = (candidate) => {
+    if (seenIds.has(candidate)) return true;
+    if (typeof document === 'undefined') return false;
+    const existing = document.getElementById(candidate);
+    return Boolean(existing && existing !== el);
+  };
+  while (taken(unique)) unique = `${id}-${n++}`;
+  el.id = unique;
+  el.dataset.outlineLead = '1';
+  el.classList.add('outline-lead-anchor');
+  seenIds.add(unique);
+  return unique;
+}
+
+function clearLeadAnchor(el) {
+  if (!el) return;
+  el.classList.remove('outline-lead-anchor');
+  if (el.dataset.outlineLead === '1') {
+    el.removeAttribute('id');
+    delete el.dataset.outlineLead;
+  }
+}
+
+/** When a Markdown block has no headings, outline it from the opening words. */
+export function appendLeadOutlineItem(items, root, { anchorId, level = 2, seenIds }) {
+  if (!root) return false;
+  if (root.querySelector('h1, h2, h3, h4, h5, h6')) {
+    clearLeadAnchor(root);
+    return false;
+  }
+  const raw = readableOutlineSource(root);
+  const label = outlineLeadLabel(raw);
+  if (!label) {
+    clearLeadAnchor(root);
+    return false;
+  }
+  const id = assignOutlineAnchor(root, anchorId, seenIds);
+  const fullTitle = raw.length > 180 ? `${raw.slice(0, 180).replace(/\s+\S*$/, '') || raw.slice(0, 180)}…` : raw;
+  items.push({ id, label, fullTitle, level, isTurn: false });
+  return true;
 }
 
 function computeLineDiff(before, after) {
@@ -613,6 +794,9 @@ function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning, 
     userCard.className = 'user-card';
 
     const timeStr = turn.createdAt ? new Date(turn.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+    const longPrompt = isLongUserPrompt(promptText);
+    const promptOpen = longPrompt && expandedState.has(`${turn.id}:user-prompt`);
+    if (longPrompt) userCard.dataset.promptOpen = String(Boolean(promptOpen));
     let mentionsHtml = '';
     if (turn.user.mentions?.length) {
       mentionsHtml = `<div class="mention-row">${turn.user.mentions.map((m) => {
@@ -623,12 +807,20 @@ function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning, 
       }).join('')}</div>`;
     }
 
+    const foldBtn = longPrompt
+      ? `<button type="button" class="user-prompt-toggle" data-action="toggle-user-prompt">${escapeHtml(promptOpen ? t('showLessPrompt') : t('showMorePrompt'))}</button>`
+      : '';
     userCard.innerHTML = `
       <div class="user-card-header">
         <span class="user-badge">${escapeHtml(t('youTurnBadge', { index: turn.index }))}</span>
-        <span>${escapeHtml(timeStr)}</span>
+        <span class="user-card-tools">
+          <button type="button" class="code-mini-btn" data-action="copy-prompt" title="${escapeHtml(t('copyPromptTip'))}" ${promptText.trim() ? '' : 'hidden'}>${escapeHtml(t('copyPromptBtn'))}</button>
+          <button type="button" class="code-mini-btn" data-action="copy-response" title="${escapeHtml(t('copyResponseTip'))}" hidden>${escapeHtml(t('copyResponseBtn'))}</button>
+          <span class="user-card-time">${escapeHtml(timeStr)}</span>
+        </span>
       </div>
       <div class="user-prompt-text">${escapeHtml(promptText || '(empty input)')}</div>
+      ${foldBtn}
       ${mentionsHtml}
     `;
     el.appendChild(userCard);
@@ -766,6 +958,7 @@ function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning, 
     el.appendChild(streamWrap);
   }
 
+  rememberTurnCopy(el, turn);
   return el;
 }
 
@@ -829,6 +1022,7 @@ function patchProcessBodyInPlace(bodyEl, processItems, { theme, baseDir, expande
 
 function patchTurnElementInPlace(existingEl, turn, { theme, baseDir, expandedState, isTurnRunning, isTurnWaitingDecision = false, hookState, liveTaskLog, sig, isLiveUpdate = false, onStreamTick = null, turnRunningSinceMs = 0 }) {
   existingEl.dataset.signature = sig;
+  rememberTurnCopy(existingEl, turn);
   const isTurnInterrupted = Boolean(turn.interrupted && !isTurnRunning && !isTurnWaitingDecision);
 
   const processItems = [];
@@ -1243,6 +1437,39 @@ export class TranscriptRenderer {
     this.container.addEventListener('click', async (e) => {
       if (e.target.closest('[data-local-href], [data-open-conv]')) {
         return; // Handled by attachCodeCardInteractions
+      }
+
+      const copyBtn = e.target.closest('[data-action="copy-prompt"], [data-action="copy-response"]');
+      if (copyBtn) {
+        const turnEl = copyBtn.closest('.turn-block');
+        const copyingPrompt = copyBtn.dataset.action === 'copy-prompt';
+        const text = copyingPrompt ? turnEl?._copyPromptText : turnEl?._copyResponseText;
+        if (!text) return;
+        const ok = await writeClipboardText(text);
+        if (ok) {
+          const restoreLabel = copyingPrompt ? t('copyPromptBtn') : t('copyResponseBtn');
+          copyBtn.dataset.busy = '1';
+          copyBtn.textContent = t('copiedBtn');
+          setTimeout(() => {
+            delete copyBtn.dataset.busy;
+            copyBtn.textContent = restoreLabel;
+          }, 1300);
+        }
+        return;
+      }
+
+      const promptToggle = e.target.closest('[data-action="toggle-user-prompt"]');
+      if (promptToggle) {
+        const card = promptToggle.closest('.user-card');
+        const turnEl = promptToggle.closest('.turn-block');
+        if (!card || !turnEl) return;
+        const key = `${turnEl.dataset.turnId}:user-prompt`;
+        const nextOpen = card.dataset.promptOpen !== 'true';
+        card.dataset.promptOpen = String(nextOpen);
+        promptToggle.textContent = nextOpen ? t('showLessPrompt') : t('showMorePrompt');
+        if (nextOpen) this.expandedState.add(key);
+        else this.expandedState.delete(key);
+        return;
       }
 
       const cliTabBtn = e.target.closest('[data-cli-tab]');
@@ -1668,14 +1895,27 @@ export class TranscriptRenderer {
       const label = snippet ? `${badge} · ${snippet}` : badge;
       seenIds.add(turnEl.id);
       items.push({ id: turnEl.id, label, fullTitle, level: 0, isTurn: true });
-      turnEl.querySelectorAll(':scope > .assistant-markdown h1, :scope > .assistant-markdown h2, :scope > .assistant-markdown h3').forEach((h) => {
-        if (!h.id || seenIds.has(h.id)) {
-          const baseSlug = h.id || `hd-${++headingIdx}`;
-          h.id = `${turnEl.id}-${baseSlug}`;
+      turnEl.querySelectorAll(':scope > .assistant-markdown').forEach((mdEl, mdIdx) => {
+        const headings = mdEl.querySelectorAll('h1, h2, h3, h4, h5, h6');
+        if (!headings.length) {
+          appendLeadOutlineItem(items, mdEl, {
+            anchorId: `${turnEl.id}-lead-${mdEl.dataset.stepIndex || mdIdx}`,
+            level: 2,
+            seenIds,
+          });
+          return;
         }
-        seenIds.add(h.id);
-        const level = Number(h.tagName.slice(1));
-        items.push({ id: h.id, label: h.textContent.trim(), fullTitle: h.textContent.trim(), level, isTurn: false });
+        clearLeadAnchor(mdEl);
+        headings.forEach((h) => {
+          if (!h.id || seenIds.has(h.id)) {
+            const baseSlug = h.id || `hd-${++headingIdx}`;
+            h.id = `${turnEl.id}-${baseSlug}`;
+          }
+          seenIds.add(h.id);
+          const level = Math.min(3, Number(h.tagName.slice(1)) || 1);
+          const txt = h.textContent.trim();
+          items.push({ id: h.id, label: txt, fullTitle: txt, level, isTurn: false });
+        });
       });
     });
     return items;

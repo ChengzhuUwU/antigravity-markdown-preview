@@ -857,8 +857,20 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   font-size: 0.72rem;
   color: var(--text-faint);
+}
+
+.user-card-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.user-card-time {
+  font-variant-numeric: tabular-nums;
 }
 
 .user-badge {
@@ -876,6 +888,31 @@ html, body {
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.user-card[data-prompt-open="false"] .user-prompt-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  line-clamp: 6;
+  max-height: calc(1.55em * 6);
+  overflow: hidden;
+}
+
+.user-prompt-toggle {
+  align-self: flex-start;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.user-prompt-toggle:hover {
+  text-decoration: underline;
 }
 
 .user-meta-outside {
@@ -1360,6 +1397,10 @@ html[data-prose-cjk="fangsong"] .assistant-markdown {
   margin-top: 1.4em;
   margin-bottom: 0.55em;
   color: var(--text-main);
+  scroll-margin-top: 16px;
+}
+
+.assistant-markdown.outline-lead-anchor {
   scroll-margin-top: 16px;
 }
 

@@ -16,7 +16,7 @@ import {
   renderSpreadsheetViewer,
   renderPresentationViewer,
 } from './doc-viewers.js';
-import { TranscriptRenderer, formatCompactTokens, renderCliInsightsHtml } from './transcript-view.js';
+import { TranscriptRenderer, appendLeadOutlineItem, formatCompactTokens, renderCliInsightsHtml } from './transcript-view.js';
 
 const isSidecar = Boolean(window.sidecar && typeof window.sidecar.fetch === 'function');
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
@@ -313,6 +313,8 @@ const state = {
   sideHistoryIdx: -1,
   sideCurrent: null,
   popupCurrent: null,
+  sideByConv: new Map(),
+  cliToolByConv: new Map(),
   activeCliToolTab: null,
   authRequired: false,
   authenticated: true,
@@ -2176,8 +2178,13 @@ async function revealInFolder(rawPath, baseDir = '', triggerBtn = null) {
 async function openConversation(convId, { scrollToLatestUser = true } = {}) {
   if (!convId) return;
   const reqId = ++state.navSeq;
+  const prevConvId = state.activeConvId;
+  if (state.mode === 'sessions' && prevConvId && prevConvId !== convId) {
+    stashConversationChrome(prevConvId);
+  }
   state.mode = 'sessions';
   state.activeConvId = convId;
+  if (prevConvId !== convId) restoreConversationChrome(convId);
   if (scrollToLatestUser) state.autoFollow = true;
   markConversationAsRead(convId);
   persistNavigationState({ mode: 'sessions', convId });
@@ -2627,12 +2634,18 @@ function renderCustomPreview(doc) {
   const toc = [];
   const seenIds = new Set();
   let hIdx = 0;
-  container.querySelectorAll('h1, h2, h3').forEach((h) => {
-    if (!h.id || seenIds.has(h.id)) h.id = `md-hd-${++hIdx}`;
-    seenIds.add(h.id);
-    const txt = h.textContent.trim();
-    toc.push({ id: h.id, label: txt, fullTitle: txt, level: Number(h.tagName.slice(1)), isTurn: false });
-  });
+  const headings = container.querySelectorAll('h1, h2, h3, h4, h5, h6');
+  if (!headings.length) {
+    appendLeadOutlineItem(toc, container, { anchorId: 'doc-body-lead', level: 1, seenIds });
+  } else {
+    headings.forEach((h) => {
+      if (!h.id || seenIds.has(h.id)) h.id = `md-hd-${++hIdx}`;
+      seenIds.add(h.id);
+      const txt = h.textContent.trim();
+      const level = Math.min(3, Number(h.tagName.slice(1)) || 1);
+      toc.push({ id: h.id, label: txt, fullTitle: txt, level, isTurn: false });
+    });
+  }
   renderToc(toc);
 }
 
@@ -2774,9 +2787,66 @@ async function openInSidePreview(rawHref, baseDir = '', { pushHistory = true } =
 }
 
 function closeSidePreview() {
+  state.sideReqSeq += 1;
   el('side-preview-pane')?.classList.add('hidden');
   el('side-resizer')?.classList.add('hidden');
   state.sideCurrent = null;
+}
+
+function snapshotSideChrome() {
+  const paneOpen = Boolean(state.sideCurrent) && !el('side-preview-pane')?.classList.contains('hidden');
+  return {
+    open: paneOpen,
+    history: state.sideHistory.map((item) => ({ ...item })),
+    historyIdx: state.sideHistoryIdx,
+    current: paneOpen ? {
+      rawHref: state.sideCurrent.rawHref || state.sideCurrent.path || '',
+      baseDir: state.sideCurrent.baseDir || '',
+      path: state.sideCurrent.path || '',
+      kind: state.sideCurrent.kind || '',
+    } : null,
+  };
+}
+
+function stashConversationChrome(convId) {
+  if (!convId) return;
+  state.sideByConv.set(convId, snapshotSideChrome());
+  state.cliToolByConv.set(convId, state.activeCliToolTab || null);
+}
+
+function clearLiveSidePreview() {
+  closeSidePreview();
+  state.sideHistory = [];
+  state.sideHistoryIdx = -1;
+  updateSideNavButtons();
+}
+
+function restoreConversationChrome(convId) {
+  state.activeCliToolTab = state.cliToolByConv.get(convId) || null;
+  el('tools-menu')?.classList.add('hidden');
+  el('tools-btn')?.classList.toggle('active', Boolean(state.activeCliToolTab));
+  el('cli-tools-drawer')?.classList.add('hidden');
+
+  const saved = state.sideByConv.get(convId);
+  if (!saved?.open || !saved.current) {
+    clearLiveSidePreview();
+    return;
+  }
+  state.sideHistory = saved.history.map((item) => ({ ...item }));
+  state.sideHistoryIdx = Number.isInteger(saved.historyIdx) ? saved.historyIdx : -1;
+  updateSideNavButtons();
+  const cur = saved.current;
+  if (cur.kind === 'directory') {
+    const folder = cur.path || cur.rawHref;
+    state.sideCurrent = { path: folder, rawHref: folder, baseDir: folder, kind: 'directory' };
+    el('side-preview-pane')?.classList.remove('hidden');
+    el('side-resizer')?.classList.remove('hidden');
+    browseFolderInPreview(folder, '', 'sidebar');
+  } else if (cur.rawHref || cur.path) {
+    openInSidePreview(cur.rawHref || cur.path, cur.baseDir || '', { pushHistory: false });
+  } else {
+    clearLiveSidePreview();
+  }
 }
 
 function openZoomImage(src, alt) {
@@ -3028,7 +3098,9 @@ function renderCliToolsDrawer() {
   const drawer = el('cli-tools-drawer');
   renderToolsMenu();
   if (!drawer) return;
-  if (state.mode !== 'sessions' || !state.activeCliToolTab || !state.currentViewData?.view) {
+  const viewConvId = state.currentViewData?.conversationId || '';
+  const viewMatches = !viewConvId || viewConvId === state.activeConvId;
+  if (state.mode !== 'sessions' || !state.activeCliToolTab || !state.currentViewData?.view || !viewMatches) {
     drawer.classList.add('hidden');
     return;
   }
@@ -3550,6 +3622,7 @@ async function bootstrap() {
   });
 
   el('mode-docs-btn')?.addEventListener('click', () => {
+    if (state.mode === 'sessions' && state.activeConvId) stashConversationChrome(state.activeConvId);
     const validTarget = state.customPreviews.find((d) => d.id === state.activePreviewId)?.id || state.customPreviews[0]?.id || '';
     if (validTarget) {
       openCustomPreview(validTarget);

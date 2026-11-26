@@ -25,7 +25,8 @@ This document provides complete architectural context, user UX contracts, platfo
 
 | Date | Tag / Version | Commit | Highlights |
 |---|---|---|---|
-| 2026-11-26 | `v0.4.1` | `HEAD` | Interactive user-decision prompts (`ask_question` & `exit_plan_mode` cards + `⏳ Awaiting Decision` topbar/sidebar/toast alerts); interrupted/canceled turn detection (`USER_CANCELED` + SQLite idle sync + `TranscriptReader` cache invalidation + non-streaming execution/command output copy); navigation race/jump fixes (`--focus` vs non-intrusive switch toast, in-place `--restart`, per-tab `sessionStorage`, sidebar hover freeze); left-sidebar top-left collapse button for narrow windows |
+| 2026-11-26 | unreleased | `HEAD` | Outline lead-label fallback for heading-less replies (`h4`–`h6` included, clamped to level 3); per-turn `Copy prompt` / `Copy response` plus 6-line fold for long user input; per-conversation right file sidebar and `/btw` · `/context` · `/usage` tab (in-page memory only) |
+| 2026-11-26 | `v0.4.1` | `55f01ae` | Interactive user-decision prompts (`ask_question` & `exit_plan_mode` cards + `⏳ Awaiting Decision` topbar/sidebar/toast alerts); interrupted/canceled turn detection (`USER_CANCELED` + SQLite idle sync + `TranscriptReader` cache invalidation + non-streaming execution/command output copy); navigation race/jump fixes (`--focus` vs non-intrusive switch toast, in-place `--restart`, per-tab `sessionStorage`, sidebar hover freeze); left-sidebar top-left collapse button for narrow windows |
 | 2026-11-26 | `v0.4.0` | `ce34cb7` | Custom theme-native `PDF.js v4` + offline Office (`Word .docx/.doc`, `Excel .xlsx/.xls/.ods`, `PowerPoint .pptx/.ppt`) viewers; 3-state session status (Apple 12-spoke spinner + `Unread` completed highlight); `Font Size` (`12px–24px` + `↺`) + decoupled `Latin × CJK` collapsible font pickers (`Times New Roman`, `华文宋体`, `楷体`, `仿宋`); multi-candidate named Custom RGB palettes (`custom-palettes.json`); live `update_steps` checklist & `agy-preview --restart` |
 | 2026-11-25 | `v0.3.1` | `98d2e56` | Adaptive horizontal-fill Mermaid sizing + `↔ Expand` / `↔ Fit Width`; sub-second SSE live streaming + `task-*.log` tail + progressive `--stdin`; `★ Pinned` sessions above projects; one-click project folder collapse/expand; verified Windows Explorer `📂 Folder` + in-app directory browser fallback; standardized `/preview` on `agy-preview` |
 | 2026-11-25 | `v0.3.0` | `15f262f` | Renamed plugin to `agy-session-preview` (`Session Preview`); optional server password auth (`server/auth.mjs` + CLI `password set/cancel/disable/activate/print`), inline PDF/video/audio/CSV previews with HTTP `Range` (`206`) streaming, foreground Windows `📂 Folder` + cross-platform file picker fix, user-resizable larger `#mermaid-modal`, and live two-color Custom RGB palette panel |
@@ -120,6 +121,7 @@ When modifying the UI or docs, strictly preserve these explicit user design deci
 3. **Top-Right `Outline` & Always-Collapsed Execution**:
    - Keep `Outline` (`#toc-toggle-btn`) at the **far top-right** of the topbar.
    - **Do NOT add global `Expand All` / `Collapse All` buttons**. Intermediate reasoning chains and tool calls stay folded inside per-turn `Execution process` cards by default (and auto-collapse when an active turn completes).
+   - If a final assistant message or Docs/Clips body has no `#`–`######` heading, the Outline still shows one lead-word jump target. Existing headings win, and `h4`–`h6` appear clamped to level 3.
    - Subagents in the left `Sessions` tree stay collapsed by default (`▸ N subagents`), while remaining accessible inside the session view (`Subagents invoked in this session` + `Open Subagent` / `← Parent`).
 4. **Open Session at Latest User Input**:
    - Opening a conversation scrolls automatically to the **last `.user-card`** (`scrollToLastUserTurn()`), while `⤒` / `⤓` topbar buttons jump to top/bottom on demand.
@@ -128,6 +130,10 @@ When modifying the UI or docs, strictly preserve these explicit user design deci
    - Clicking the adjacent **`Open in sidebar`** pill (rendered on all previewable Markdown/code/image links) opens the resizable **Right Split Pane** (`#side-preview-pane`).
    - Both views (plus the `Docs / Clips` Base Dir ribbon) provide **`📂 Folder`** (`POST /api/reveal-in-folder`) to select the file in OS Explorer/Finder.
    - `Docs / Clips` mode hides the `antigravity-cli` flavor dropdown since standalone docs are flavor-independent.
+   - The right file pane and the `/btw` · `/context` · `/usage` drawer are **per conversation** for the current page. Switching sessions restores that session’s own open file/history and tool tab, or leaves both closed. Do not keep one global pane across conversations. Same-conversation refresh must not clear them. The split-pane width stays a shared layout preference.
+6. **Per-Turn Copy and Long Prompt Fold**:
+   - Each user card offers `Copy prompt` / `Copy response` (`复制提问` / `复制回复`) as plain text. The response is the final non-intermediate markdown plus decision plan/questions/answers, not execution-process chatter.
+   - User prompts longer than 8 lines or 480 characters start collapsed to 6 lines (`Show more` / `Show less`). Fold state is per turn and clears when the conversation changes.
 
 ---
 

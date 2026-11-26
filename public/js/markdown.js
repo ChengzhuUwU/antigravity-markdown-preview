@@ -83,6 +83,35 @@ export function slugifyHeading(text) {
     .replace(/-+/g, '-');
 }
 
+/**
+ * Outline title for prose that has no Markdown heading.
+ * CJK characters count as one unit; Latin tokens stay whole words.
+ */
+export function outlineLeadLabel(text, { maxUnits = 14, maxChars = 36 } = {}) {
+  const single = String(text ?? '').replace(/\s+/g, ' ').trim();
+  if (!single) return '';
+  const token = /[\u3400-\u9fff\u3040-\u30ff\uf900-\ufaff\uac00-\ud7af]|[A-Za-z0-9]+(?:[.'’-][A-Za-z0-9]+)*|[^\s]/gu;
+  let units = 0;
+  let end = 0;
+  for (const match of single.matchAll(token)) {
+    const nextEnd = match.index + match[0].length;
+    if (units > 0 && (units >= maxUnits || nextEnd > maxChars)) break;
+    units += 1;
+    end = nextEnd;
+    if (units === 1 && nextEnd > maxChars) {
+      end = maxChars;
+      break;
+    }
+    if (units >= maxUnits || end >= maxChars) break;
+  }
+  if (!end) return '';
+  const truncated = end < single.length;
+  let label = single.slice(0, end).replace(/[\s,，.。!！?？;；:：、)）]+$/u, '');
+  if (!label) label = single.slice(0, end).trim();
+  if (!label) return '';
+  return truncated ? `${label}…` : label;
+}
+
 export function isCodeFilePath(rawHref) {
   if (!rawHref || typeof rawHref !== 'string') return false;
   const clean = rawHref.split('#')[0].split('?')[0].trim().toLowerCase();

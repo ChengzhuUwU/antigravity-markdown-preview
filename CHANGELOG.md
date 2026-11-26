@@ -2,6 +2,13 @@
 
 All notable changes to **Antigravity Session Preview (`agy-session-preview`)** will be documented in this file.
 
+## [Unreleased]
+
+### Added
+- **Outline Fallback for Heading-less Replies**: When a final assistant message or a Docs/Clips page has no `#`–`######` heading, the right Outline still shows one jump target taken from the opening words (`outlineLeadLabel`; CJK characters count as one unit, Latin words stay whole). Real headings, including `h4`–`h6` clamped to outline level 3, still take priority.
+- **Per-Turn `Copy prompt` / `Copy response` and Long-Prompt Fold**: Each user card can copy the plain-text user prompt and the final model response separately (`复制提问` / `复制回复`). The response copy includes the visible reply and decision plan/questions, and excludes intermediate execution-process chatter. Prompts longer than 8 lines or 480 characters collapse to 6 lines with `Show more` / `Show less` (`展开` / `收起`).
+- **Per-Conversation File Sidebar and Tools Panel**: Switching sessions stashes and restores that conversation’s right split pane (open file or folder, plus back/forward history) and its `/btw` · `/context` · `/usage` tab. A session that never opened them stays closed, and the previous session’s tool content is hidden immediately so it cannot flash on the next conversation. Memory lasts for the current page only.
+
 ## [0.4.1] - 2026-11-26
 
 ### Added

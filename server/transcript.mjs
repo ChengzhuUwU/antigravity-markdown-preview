@@ -676,6 +676,53 @@ function parseUserInput(rawContent) {
   return { request, mentions, metadataBlocks };
 }
 
+function extractSystemMessageInner(raw) {
+  const text = String(raw || '');
+  const start = text.lastIndexOf('<SYSTEM_MESSAGE>');
+  const end = text.lastIndexOf('</SYSTEM_MESSAGE>');
+  if (start >= 0 && end > start) return text.slice(start + '<SYSTEM_MESSAGE>'.length, end).trim();
+  return text.trim();
+}
+
+function normalizeScheduleKey(text) {
+  let value = String(text || '').trim();
+  if (value.length >= 2 && ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))) {
+    value = value.slice(1, -1).trim();
+  }
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+/** Outline title for a scheduled wakeup. Prefer the name already in the prompt. */
+export function scheduleLabelFromPrompt(prompt, ordinal = 0) {
+  const match = String(prompt || '').match(/定时巡检\s*#\s*(\d+)/);
+  if (match) return `定时巡检 #${Number(match[1])}`;
+  const n = Number(ordinal);
+  if (Number.isFinite(n) && n > 0) return `定时巡检 #${n}`;
+  return '定时巡检';
+}
+
+/**
+ * A `/schedule` wakeup arrives later as a system [Message] whose content is the
+ * registered prompt. Task-finished and "still running" notices stay inside the
+ * current turn's execution process.
+ */
+function matchScheduleWakeup(raw, prompts, taskIds) {
+  const inner = extractSystemMessageInner(raw);
+  if (!inner.startsWith('[Message]')) return null;
+  const sender = (inner.match(/\bsender=(\S+)/) || [])[1] || '';
+  const taskKey = sender.split('/').pop();
+  const content = (inner.match(/\bcontent=([\s\S]*)$/) || [])[1];
+  if (content == null) return null;
+  const prompt = content.trim();
+  if (!prompt || /^(?:Task id\b|Background command\b)/i.test(prompt)) return null;
+  const key = normalizeScheduleKey(prompt);
+  const knownTask = Boolean(sender && taskIds.has(sender)) || Boolean(taskKey && taskIds.has(taskKey));
+  const knownPrompt = prompts.has(key);
+  const namedPatrol = /定时巡检\s*#\s*\d+/.test(prompt);
+  if (!knownTask && !knownPrompt && !namedPatrol) return null;
+  return { prompt };
+}
+
 function extractTargetFile(name, args) {
   const lower = (name || '').toLowerCase();
   if (['read_file', 'view_file', 'edit_file', 'replace_file_content', 'multi_replace_file_content', 'write_file', 'write_to_file'].includes(lower)) {
@@ -756,6 +803,9 @@ export function buildNormalizedView(rawSteps, {
   const turns = [];
   let currentTurn = null;
   let pendingToolsQueue = [];
+  let scheduleOrdinal = 0;
+  const schedulePrompts = new Set();
+  const scheduleTaskIds = new Set();
   let totalThinkingChars = 0;
   let totalToolCalls = 0;
   let totalErrors = 0;
@@ -789,6 +839,56 @@ export function buildNormalizedView(rawSteps, {
       turns.push(currentTurn);
     }
     return currentTurn;
+  };
+
+  const sealCurrentTurn = () => {
+    if (!currentTurn) return;
+    if (pendingToolsQueue.length > 0) {
+      for (const pendingTool of pendingToolsQueue) {
+        pendingTool.status = 'canceled';
+        if (pendingTool._decisionItem) {
+          pendingTool._decisionItem.status = 'canceled';
+        }
+      }
+      currentTurn.interrupted = true;
+    }
+    for (const prevItem of currentTurn.items) {
+      if (prevItem.kind === 'decision' && prevItem.status === 'waiting') {
+        prevItem.status = 'canceled';
+        currentTurn.interrupted = true;
+      } else if (prevItem.status === 'RUNNING') {
+        prevItem.status = 'canceled';
+        currentTurn.interrupted = true;
+      }
+    }
+    pendingToolsQueue = [];
+  };
+
+  const beginTurn = ({ stepIndex, createdAt, user, schedule = false }) => {
+    sealCurrentTurn();
+    let scheduleLabel = '';
+    let index;
+    if (schedule) {
+      scheduleOrdinal += 1;
+      scheduleLabel = scheduleLabelFromPrompt(user?.request || '', scheduleOrdinal);
+      index = scheduleOrdinal;
+    } else {
+      index = turns.filter((t) => t.kind !== 'schedule').length + 1;
+    }
+    currentTurn = {
+      id: `turn-${stepIndex}`,
+      index,
+      stepIndex,
+      createdAt,
+      user,
+      items: [],
+      stats: { thinkingCount: 0, toolCount: 0, errorCount: 0, tokensIn: 0, tokensOut: 0 },
+    };
+    if (schedule) {
+      currentTurn.kind = 'schedule';
+      currentTurn.scheduleLabel = scheduleLabel;
+    }
+    turns.push(currentTurn);
   };
 
   for (let i = 0; i < rawSteps.length; i++) {
@@ -836,39 +936,26 @@ export function buildNormalizedView(rawSteps, {
 
     if (source === 'USER_EXPLICIT' || type === 'USER_INPUT') {
       postCheckpointUserChars += (step.content || '').length;
-      if (currentTurn) {
-        if (pendingToolsQueue.length > 0) {
-          for (const pendingTool of pendingToolsQueue) {
-            pendingTool.status = 'canceled';
-            if (pendingTool._decisionItem) {
-              pendingTool._decisionItem.status = 'canceled';
-            }
-          }
-          currentTurn.interrupted = true;
-        }
-        for (const prevItem of currentTurn.items) {
-          if (prevItem.kind === 'decision' && prevItem.status === 'waiting') {
-            prevItem.status = 'canceled';
-            currentTurn.interrupted = true;
-          } else if (prevItem.status === 'RUNNING') {
-            prevItem.status = 'canceled';
-            currentTurn.interrupted = true;
-          }
-        }
-      }
-      pendingToolsQueue = [];
-      const parsedUser = parseUserInput(step.content || '');
-      currentTurn = {
-        id: `turn-${stepIndex}`,
-        index: turns.length + 1,
+      beginTurn({
         stepIndex,
         createdAt,
-        user: parsedUser,
-        items: [],
-        stats: { thinkingCount: 0, toolCount: 0, errorCount: 0, tokensIn: 0, tokensOut: 0 },
-      };
-      turns.push(currentTurn);
+        user: parseUserInput(step.content || ''),
+      });
       continue;
+    }
+
+    if (type === 'SYSTEM_MESSAGE') {
+      const wakeup = matchScheduleWakeup(step.content || '', schedulePrompts, scheduleTaskIds);
+      if (wakeup) {
+        postCheckpointUserChars += wakeup.prompt.length;
+        beginTurn({
+          stepIndex,
+          createdAt,
+          user: { request: wakeup.prompt, mentions: [], metadataBlocks: [] },
+          schedule: true,
+        });
+        continue;
+      }
     }
 
     const turn = ensureTurn(step);
@@ -927,6 +1014,10 @@ export function buildNormalizedView(rawSteps, {
           const name = tc?.name || tc?.function?.name || 'tool';
           const lowerName = name.toLowerCase();
           const args = normalizeToolArgs(tc?.args || tc?.arguments || {});
+          if (lowerName === 'schedule') {
+            const promptKey = normalizeScheduleKey(args.Prompt || args.prompt || args.Description || '');
+            if (promptKey) schedulePrompts.add(promptKey);
+          }
           if (lowerName === 'update_steps') {
             const stepsList = extractPlanStepsList(args);
             if (stepsList.length > 0) {
@@ -1032,6 +1123,15 @@ export function buildNormalizedView(rawSteps, {
       const preview = truncatePreview(meta.body);
       const subagentMatch = (step.content || '').match(/"conversationId"\s*:\s*"([0-9a-f-]{8,})"/i);
       const targetTool = pendingToolsQueue.shift();
+      if (targetTool && String(targetTool.name || '').toLowerCase() === 'schedule') {
+        const idMatch = String(step.content || '').match(/task id:\s*(\S+)/i);
+        if (idMatch) {
+          const taskId = idMatch[1].replace(/[),.;]+$/g, '');
+          scheduleTaskIds.add(taskId);
+          const shortId = taskId.split('/').pop();
+          if (shortId) scheduleTaskIds.add(shortId);
+        }
+      }
       if (targetTool) {
         const isDecision = Boolean(targetTool._decisionItem);
         targetTool.resultStepIndex = stepIndex;

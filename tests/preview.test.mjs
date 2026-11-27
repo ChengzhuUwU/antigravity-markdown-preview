@@ -8,6 +8,7 @@ import {
   TranscriptReader,
   buildNormalizedView,
   normalizeToolArgs,
+  scheduleLabelFromPrompt,
   unquoteToolArg,
 } from '../server/transcript.mjs';
 import {
@@ -1269,4 +1270,203 @@ test('formatTurnPlainText copies the user request and final model reply, and lon
   assert.equal(formatPromptPlainText(turn), '第一行\n第二行');
   assert.equal(formatResponsePlainText(turn), '最终回复');
   assert.equal(formatResponsePlainText({ user: { request: 'only prompt' }, items: [] }), '');
+});
+
+test('buildNormalizedView gives each /schedule wakeup its own turn', () => {
+  assert.equal(scheduleLabelFromPrompt('[定时巡检 #2 / +11h] 再检查', 9), '定时巡检 #2');
+  assert.equal(scheduleLabelFromPrompt('check the GPU', 3), '定时巡检 #3');
+
+  const prompt1 = '[定时巡检 #1 / +1h] 检查训练';
+  const prompt2 = '[定时巡检 #2 / +11h] 再检查一次';
+  const steps = [
+    {
+      step_index: 1,
+      source: 'USER_EXPLICIT',
+      type: 'USER_INPUT',
+      status: 'DONE',
+      created_at: '2026-11-26T09:00:00Z',
+      content: '<USER_REQUEST>请你过 1 小时检查训练</USER_REQUEST>',
+    },
+    {
+      step_index: 2,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: '2026-11-26T09:00:01Z',
+      thinking: 'Set two timers.',
+      content: '',
+      tool_calls: [
+        { name: 'schedule', args: { DurationSeconds: '3600', Prompt: prompt1 } },
+        { name: 'schedule', args: { DurationSeconds: '39600', Prompt: prompt2 } },
+      ],
+    },
+    {
+      step_index: 3,
+      source: 'MODEL',
+      type: 'GENERIC',
+      status: 'DONE',
+      created_at: '2026-11-26T09:00:02Z',
+      content: 'Tool is running as a background task with task id: conv/task-11\nTask Description: Timer: 1h, Prompt: [定时巡检 #1 / +1h] 检查训练',
+    },
+    {
+      step_index: 4,
+      source: 'MODEL',
+      type: 'GENERIC',
+      status: 'DONE',
+      created_at: '2026-11-26T09:00:02Z',
+      content: 'Tool is running as a background task with task id: conv/task-12\nTask Description: Timer: 11h, Prompt: [定时巡检 #2 / +11h] 再检查一次',
+    },
+    {
+      step_index: 5,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: '2026-11-26T09:00:03Z',
+      content: '两次定时巡检已设好',
+    },
+    {
+      step_index: 6,
+      source: 'SYSTEM',
+      type: 'SYSTEM_MESSAGE',
+      status: 'DONE',
+      created_at: '2026-11-26T10:00:00Z',
+      content: `The following is a <SYSTEM_MESSAGE> not actually sent by the user.\n\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-26T10:00:00Z sender=conv/task-11 priority=MESSAGE_PRIORITY_HIGH content=${prompt1}\n</SYSTEM_MESSAGE>`,
+    },
+    {
+      step_index: 7,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: '2026-11-26T10:00:01Z',
+      thinking: 'Checking now.',
+      content: '正在拉取第 1 次巡检',
+      tool_calls: [{ name: 'run_command', args: { CommandLine: 'colab sessions' } }],
+    },
+    {
+      step_index: 8,
+      source: 'MODEL',
+      type: 'GENERIC',
+      status: 'DONE',
+      created_at: '2026-11-26T10:00:02Z',
+      content: 'Command exited with code 0.\nCommand output:\nok',
+    },
+    {
+      step_index: 9,
+      source: 'SYSTEM',
+      type: 'SYSTEM_MESSAGE',
+      status: 'DONE',
+      created_at: '2026-11-26T10:00:03Z',
+      content: '<SYSTEM_MESSAGE>\nTask id "conv/task-11" finished with result: Command exited with code 0.\n</SYSTEM_MESSAGE>',
+    },
+    {
+      step_index: 10,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: '2026-11-26T10:00:04Z',
+      content: '### 定时巡检 #1 状态汇报\n\n一切正常',
+    },
+    {
+      step_index: 11,
+      source: 'SYSTEM',
+      type: 'SYSTEM_MESSAGE',
+      status: 'DONE',
+      created_at: '2026-11-26T20:00:00Z',
+      content: `<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-26T20:00:00Z sender=conv/task-12 priority=MESSAGE_PRIORITY_HIGH content=${prompt2}\n</SYSTEM_MESSAGE>`,
+    },
+    {
+      step_index: 12,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: '2026-11-26T20:00:04Z',
+      content: '### 定时巡检 #2 状态汇报\n\nTask 1 已完成',
+    },
+  ];
+
+  const view = buildNormalizedView(steps);
+  assert.equal(view.turns.length, 3);
+  assert.equal(view.turns[0].index, 1);
+  assert.equal(view.turns[0].kind, undefined);
+  assert.equal(view.turns[0].user.request, '请你过 1 小时检查训练');
+  const setupMd = view.turns[0].items.filter((item) => item.kind === 'markdown');
+  assert.equal(setupMd.at(-1).intermediate, false);
+  assert.match(setupMd.at(-1).text, /已设好/);
+
+  assert.equal(view.turns[1].kind, 'schedule');
+  assert.equal(view.turns[1].scheduleLabel, '定时巡检 #1');
+  assert.equal(view.turns[1].user.request, prompt1);
+  const report1 = view.turns[1].items.filter((item) => item.kind === 'markdown');
+  assert.equal(report1[0].intermediate, true);
+  assert.equal(report1[1].intermediate, false);
+  assert.match(report1[1].text, /状态汇报/);
+  assert.equal(view.turns[1].items.some((item) => item.kind === 'system' && /定时巡检 #1/.test(item.text)), false);
+  assert.equal(view.turns[1].items.some((item) => item.kind === 'system' && /finished with result/.test(item.text)), true);
+
+  assert.equal(view.turns[2].kind, 'schedule');
+  assert.equal(view.turns[2].scheduleLabel, '定时巡检 #2');
+  assert.equal(view.turns[2].items.find((item) => item.kind === 'markdown').intermediate, false);
+
+  const followed = buildNormalizedView([
+    ...steps,
+    {
+      step_index: 13,
+      source: 'USER_EXPLICIT',
+      type: 'USER_INPUT',
+      status: 'DONE',
+      created_at: '2026-11-26T21:00:00Z',
+      content: '<USER_REQUEST>收敛情况怎么样了</USER_REQUEST>',
+    },
+    {
+      step_index: 14,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: '2026-11-26T21:00:01Z',
+      content: '收敛正常',
+    },
+  ]);
+  assert.equal(followed.turns[3].index, 2);
+  assert.equal(followed.turns[3].kind, undefined);
+  assert.equal(followed.turns[3].user.request, '收敛情况怎么样了');
+  assert.equal(followed.turns[3].items.find((item) => item.kind === 'markdown').intermediate, false);
+
+  const orphan = buildNormalizedView([
+    {
+      step_index: 1,
+      source: 'USER_EXPLICIT',
+      type: 'USER_INPUT',
+      status: 'DONE',
+      created_at: '2026-11-26T09:00:00Z',
+      content: '<USER_REQUEST>看看进度</USER_REQUEST>',
+    },
+    {
+      step_index: 2,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: '2026-11-26T09:00:01Z',
+      content: '进度正常',
+    },
+    {
+      step_index: 3,
+      source: 'SYSTEM',
+      type: 'SYSTEM_MESSAGE',
+      status: 'DONE',
+      created_at: '2026-11-26T18:00:00Z',
+      content: '<SYSTEM_MESSAGE>\n[Message] sender=conv/task-9 priority=MESSAGE_PRIORITY_HIGH content=[定时巡检 #4 / +16h] 晨间汇总\n</SYSTEM_MESSAGE>',
+    },
+    {
+      step_index: 4,
+      source: 'MODEL',
+      type: 'PLANNER_RESPONSE',
+      status: 'DONE',
+      created_at: '2026-11-26T18:00:04Z',
+      content: '晨间汇总：已完成',
+    },
+  ]);
+  assert.equal(orphan.turns.length, 2);
+  assert.equal(orphan.turns[0].items.find((item) => item.kind === 'markdown').intermediate, false);
+  assert.equal(orphan.turns[1].scheduleLabel, '定时巡检 #4');
+  assert.equal(orphan.turns[1].user.request, '[定时巡检 #4 / +16h] 晨间汇总');
 });

@@ -3158,7 +3158,9 @@ function exportCurrentMarkdown() {
     filename = `${title.slice(0, 40).replace(/[^a-zA-Z0-9._-]+/g, '_')}.md`;
     const chunks = [`# ${title}\n`];
     for (const turn of state.currentViewData.view.turns) {
-      if (turn.user?.request) {
+      if (turn.kind === 'schedule') {
+        chunks.push(`## ${turn.scheduleLabel || '定时巡检'}\n\n${turn.user?.request || ''}\n`);
+      } else if (turn.user?.request) {
         chunks.push(`## Turn ${turn.index} — User\n\n${turn.user.request}\n`);
       }
       for (const item of turn.items) {

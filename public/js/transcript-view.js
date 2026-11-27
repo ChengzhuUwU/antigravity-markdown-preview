@@ -109,6 +109,12 @@ function syncCopyButton(btn, label, tip, text) {
   if (!btn.dataset.busy) btn.textContent = label;
 }
 
+function turnBadgeText(turn) {
+  if (turn?.kind === 'schedule' && turn.scheduleLabel) return turn.scheduleLabel;
+  if (turn?.index != null) return t('youTurnBadge', { index: turn.index });
+  return '';
+}
+
 function rememberTurnCopy(turnEl, turn) {
   if (!turnEl) return;
   turnEl._copyPromptText = formatPromptPlainText(turn);
@@ -117,7 +123,8 @@ function rememberTurnCopy(turnEl, turn) {
   syncCopyButton(card?.querySelector('[data-action="copy-prompt"]'), t('copyPromptBtn'), t('copyPromptTip'), turnEl._copyPromptText);
   syncCopyButton(card?.querySelector('[data-action="copy-response"]'), t('copyResponseBtn'), t('copyResponseTip'), turnEl._copyResponseText);
   const badge = turnEl.querySelector(':scope > .user-card .user-badge');
-  if (badge && turn?.index != null) badge.textContent = t('youTurnBadge', { index: turn.index });
+  const badgeText = turnBadgeText(turn);
+  if (badge && badgeText) badge.textContent = badgeText;
   const foldBtn = turnEl.querySelector(':scope > .user-card [data-action="toggle-user-prompt"]');
   if (foldBtn) {
     const open = turnEl.querySelector(':scope > .user-card')?.dataset.promptOpen === 'true';
@@ -785,8 +792,12 @@ function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning, 
   el.dataset.signature = `${turnSignature(turn)}:${stateTag}:${liveSig}:${baseDir}:${getLang()}`;
 
   const promptText = turn.user?.request || '';
-  el.dataset.promptPreview = cleanTocSnippet(promptText, 18);
+  el.dataset.promptPreview = turn.kind === 'schedule' ? '' : cleanTocSnippet(promptText, 18);
   el.dataset.promptFull = promptText.replace(/\s+/g, ' ').trim().slice(0, 140);
+  if (turn.kind === 'schedule' && turn.scheduleLabel) {
+    el.dataset.turnKind = 'schedule';
+    el.dataset.scheduleLabel = turn.scheduleLabel;
+  }
 
   if (turn.user) {
     // 1. Clean minimal User Input Card (metadata moved outside below!)
@@ -812,7 +823,7 @@ function buildTurnElement(turn, { theme, baseDir, expandedState, isTurnRunning, 
       : '';
     userCard.innerHTML = `
       <div class="user-card-header">
-        <span class="user-badge">${escapeHtml(t('youTurnBadge', { index: turn.index }))}</span>
+        <span class="user-badge">${escapeHtml(turnBadgeText(turn))}</span>
         <span class="user-card-tools">
           <button type="button" class="code-mini-btn" data-action="copy-prompt" title="${escapeHtml(t('copyPromptTip'))}" ${promptText.trim() ? '' : 'hidden'}>${escapeHtml(t('copyPromptBtn'))}</button>
           <button type="button" class="code-mini-btn" data-action="copy-response" title="${escapeHtml(t('copyResponseTip'))}" hidden>${escapeHtml(t('copyResponseBtn'))}</button>
@@ -1890,9 +1901,12 @@ export class TranscriptRenderer {
     let headingIdx = 0;
     this.container.querySelectorAll('.turn-block').forEach((turnEl) => {
       const badge = turnEl.querySelector('.user-badge')?.textContent || turnEl.id;
+      const scheduleLabel = turnEl.dataset.scheduleLabel || '';
       const snippet = turnEl.dataset.promptPreview || '';
-      const fullTitle = turnEl.dataset.promptFull ? `${badge}: ${turnEl.dataset.promptFull}` : badge;
-      const label = snippet ? `${badge} · ${snippet}` : badge;
+      const fullTitle = scheduleLabel
+        ? (turnEl.dataset.promptFull ? `${scheduleLabel}: ${turnEl.dataset.promptFull}` : scheduleLabel)
+        : (turnEl.dataset.promptFull ? `${badge}: ${turnEl.dataset.promptFull}` : badge);
+      const label = scheduleLabel || (snippet ? `${badge} · ${snippet}` : badge);
       seenIds.add(turnEl.id);
       items.push({ id: turnEl.id, label, fullTitle, level: 0, isTurn: true });
       turnEl.querySelectorAll(':scope > .assistant-markdown').forEach((mdEl, mdIdx) => {

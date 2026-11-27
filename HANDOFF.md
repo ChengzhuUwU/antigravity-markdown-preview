@@ -25,7 +25,8 @@ This document provides complete architectural context, user UX contracts, platfo
 
 | Date | Tag / Version | Commit | Highlights |
 |---|---|---|---|
-| 2026-11-26 | unreleased | `HEAD` | Outline lead-label fallback for heading-less replies (`h4`–`h6` included, clamped to level 3); per-turn `Copy prompt` / `Copy response` plus 6-line fold for long user input; per-conversation right file sidebar and `/btw` · `/context` · `/usage` tab (in-page memory only) |
+| 2026-11-27 | unreleased | `HEAD` | `/schedule` wakeups render as their own turns (`定时巡检 #N` on the card and in the Outline); user-turn indexes still count only user messages |
+| 2026-11-26 | unreleased | `d9a9d66` | Outline lead-label fallback for heading-less replies (`h4`–`h6` included, clamped to level 3); per-turn `Copy prompt` / `Copy response` plus 6-line fold for long user input; per-conversation right file sidebar and `/btw` · `/context` · `/usage` tab (in-page memory only) |
 | 2026-11-26 | `v0.4.1` | `55f01ae` | Interactive user-decision prompts (`ask_question` & `exit_plan_mode` cards + `⏳ Awaiting Decision` topbar/sidebar/toast alerts); interrupted/canceled turn detection (`USER_CANCELED` + SQLite idle sync + `TranscriptReader` cache invalidation + non-streaming execution/command output copy); navigation race/jump fixes (`--focus` vs non-intrusive switch toast, in-place `--restart`, per-tab `sessionStorage`, sidebar hover freeze); left-sidebar top-left collapse button for narrow windows |
 | 2026-11-26 | `v0.4.0` | `ce34cb7` | Custom theme-native `PDF.js v4` + offline Office (`Word .docx/.doc`, `Excel .xlsx/.xls/.ods`, `PowerPoint .pptx/.ppt`) viewers; 3-state session status (Apple 12-spoke spinner + `Unread` completed highlight); `Font Size` (`12px–24px` + `↺`) + decoupled `Latin × CJK` collapsible font pickers (`Times New Roman`, `华文宋体`, `楷体`, `仿宋`); multi-candidate named Custom RGB palettes (`custom-palettes.json`); live `update_steps` checklist & `agy-preview --restart` |
 | 2026-11-25 | `v0.3.1` | `98d2e56` | Adaptive horizontal-fill Mermaid sizing + `↔ Expand` / `↔ Fit Width`; sub-second SSE live streaming + `task-*.log` tail + progressive `--stdin`; `★ Pinned` sessions above projects; one-click project folder collapse/expand; verified Windows Explorer `📂 Folder` + in-app directory browser fallback; standardized `/preview` on `agy-preview` |
@@ -94,7 +95,7 @@ flowchart LR
   - [server/app.mjs](server/app.mjs#L188-L258) — `resolveSafeFilePath()` (handles `file://`, Windows drive paths, ancestor `.git` roots, bare filenames via `findBareFileUnderRoot()`, directory `README.md` auto-resolution, and credential path blocking).
   - [server/app.mjs](server/app.mjs#L301-L857) — `createPreviewEngine()` serving `/api/conversations`, `/api/conversations/:id/view`, `/api/conversations/:id/btw-notes`, `/api/file-info`, `/api/raw-file`, `/api/reveal-in-folder`, `/api/previews`, `/api/pick-file`, `/api/hook-event`, `/api/focus`, and `/api/events` (SSE).
   - [server/transcript.mjs](server/transcript.mjs#L190-L330) — `listConversations()` reading `conversation_summaries.db` + `conversations_fts` (`user_body` full-text search) + project names from `~/.gemini/config/projects/*.json`.
-  - [server/transcript.mjs](server/transcript.mjs#L650-L950) — `TranscriptReader` (byte-offset incremental `.jsonl` tailing) & `buildNormalizedView()` (turn grouping, `edit_file` unified diff extraction, intermediate vs final Markdown tagging, `/context` 10×10 token estimation, and `/usage` 5h/7d rolling aggregation).
+  - [server/transcript.mjs](server/transcript.mjs#L650-L950) — `TranscriptReader` (byte-offset incremental `.jsonl` tailing) & `buildNormalizedView()` (turn grouping, `/schedule` wakeups as their own turns, `edit_file` unified diff extraction, intermediate vs final Markdown tagging, `/context` 10×10 token estimation, and `/usage` 5h/7d rolling aggregation).
   - [server/custom-preview.mjs](server/custom-preview.mjs#L126-L185) — `locateDroppedFileOnDisk()` (matches browser-dropped files byte-for-byte across known workspaces so relative links resolve against the true source folder) & `CustomPreviewStore` (`docs-store.json` + `clips/`).
 - **Frontend SPA (`public/`)**:
   - [public/index.html](public/index.html#L56-L92) — Topbar layout (`#prefs-dropdown-wrap` immediately left of `#sync-btn`, `#jump-top-btn`/`#jump-bottom-btn`, `#tools-dropdown-wrap`, `#export-btn`, and `#toc-toggle-btn` at far top-right) + `plugin:` Blob module loader ([public/index.html](public/index.html#L240-L274)).
@@ -134,6 +135,10 @@ When modifying the UI or docs, strictly preserve these explicit user design deci
 6. **Per-Turn Copy and Long Prompt Fold**:
    - Each user card offers `Copy prompt` / `Copy response` (`复制提问` / `复制回复`) as plain text. The response is the final non-intermediate markdown plus decision plan/questions/answers, not execution-process chatter.
    - User prompts longer than 8 lines or 480 characters start collapsed to 6 lines (`Show more` / `Show less`). Fold state is per turn and clears when the conversation changes.
+7. **Scheduled Checks Are Their Own Turns**:
+   - A `/schedule` wakeup opens a new section like a user turn: the registered prompt is the card body, and that firing’s final reply stays outside `Execution process`.
+   - The card and Outline title are `定时巡检 #N` when the prompt contains that name. Do not prefix them with `You · Turn #` / `你 · 第 # 轮`.
+   - User-turn numbers count only real user messages. Background task-finished and “still running” notices stay inside the current `Execution process`.
 
 ---
 

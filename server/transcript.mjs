@@ -1431,12 +1431,32 @@ export function buildNormalizedView(rawSteps, {
   };
 }
 
+function readTranscriptPrefix(transcriptPath, size) {
+  const n = Math.min(size, 192);
+  if (n <= 0) return '';
+  let fd;
+  try {
+    fd = openSync(transcriptPath, 'r');
+    const buf = Buffer.alloc(n);
+    const got = readSync(fd, buf, 0, n, 0);
+    return buf.toString('utf8', 0, got);
+  } catch {
+    return '';
+  } finally {
+    if (fd !== undefined) {
+      try { closeSync(fd); } catch {}
+    }
+  }
+}
+
 /**
  * Incremental JSONL cache keyed by transcript path.
- * Uses byte-offset append reading whenever the log only grew and the tail wasn't mutating in-place.
+ * Appends when the log only grew and its head is unchanged.
+ * A rewind rewrites the file in place; that must discard the cached steps
+ * even when the replacement is longer than the previous byte offset.
  */
 export class TranscriptReader {
-  #cache = new Map(); // path -> { bytesRead, mtimeMs, partial, steps, view, sessionStopped, userCanceled, hasActiveTaskLog, staleNow }
+  #cache = new Map(); // path -> { bytesRead, mtimeMs, prefix, partial, steps, view, sessionStopped, userCanceled, hasActiveTaskLog, staleNow }
 
   read(transcriptPath, opts = {}) {
     if (!transcriptPath || !existsSync(transcriptPath)) {
@@ -1455,8 +1475,9 @@ export class TranscriptReader {
       hasActiveTaskLog,
     };
     const cached = this.#cache.get(transcriptPath);
+    const prefix = readTranscriptPrefix(transcriptPath, st.size);
 
-    if (cached && st.size === cached.bytesRead && st.mtimeMs === cached.mtimeMs) {
+    if (cached && cached.prefix === prefix && st.size === cached.bytesRead && st.mtimeMs === cached.mtimeMs) {
       if (
         cached.sessionStopped === sessionStopped &&
         cached.userCanceled === userCanceled &&
@@ -1475,12 +1496,15 @@ export class TranscriptReader {
     }
 
     const lastStepRunning = cached?.steps?.length > 0 && cached.steps[cached.steps.length - 1]?.status === 'RUNNING';
-    let steps = cached ? cached.steps : [];
-    let partial = cached ? cached.partial : '';
-    let readFrom = cached ? cached.bytesRead : 0;
+    const headRewritten = Boolean(cached && cached.prefix !== prefix);
+    const sameLengthRewrite = Boolean(cached && st.size === cached.bytesRead);
+    let steps = cached && !headRewritten ? cached.steps : [];
+    let partial = cached && !headRewritten ? cached.partial : '';
+    let readFrom = cached && !headRewritten ? cached.bytesRead : 0;
 
-    // Full re-parse only if file shrank, first read, or a RUNNING tail might have updated in place
-    if (!cached || st.size < cached.bytesRead || (lastStepRunning && st.size === cached.bytesRead)) {
+    // Full re-parse when the file shrank, its head was replaced (/rewind),
+    // the same-length body was rewritten, or a RUNNING tail was updated in place.
+    if (!cached || headRewritten || sameLengthRewrite || st.size < cached.bytesRead || (lastStepRunning && st.size === cached.bytesRead)) {
       steps = [];
       partial = '';
       readFrom = 0;
@@ -1518,6 +1542,7 @@ export class TranscriptReader {
     this.#cache.set(transcriptPath, {
       bytesRead: readFrom,
       mtimeMs: st.mtimeMs,
+      prefix,
       partial,
       steps,
       view,

@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import vm from 'node:vm';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { get as httpGet, request as httpRequest } from 'node:http';
@@ -21,10 +23,23 @@ import {
 import { PreviewAuthManager } from '../server/auth.mjs';
 import { classifyFile, resolveSafeFilePath, startStandaloneServer } from '../server/app.mjs';
 import {
+  buildPickerLaunch,
+  cleanPickedPath,
+  interpretPickerOutput,
+  pickerCandidates,
+  resolveNativeFilePicker,
+  runNativeFilePicker,
+} from '../server/file-picker.mjs';
+import { createSidebarOrder, noteSidebarRoster, sortGroupsBySidebarOrder } from '../public/js/sidebar-order.js';
+import {
   classifyHref,
   computeAdaptiveInlineMermaidSize,
   isCodeFilePath,
   isPreviewableFilePath,
+  anchorProbe,
+  escapeApproxTildes,
+  locateAnchorProbe,
+  normalizeAnchorText,
   outlineLeadLabel,
   renderMarkdownHtml,
 } from '../public/js/markdown.js';
@@ -249,6 +264,21 @@ test('TranscriptReader reads incrementally when JSONL grows', () => {
     const second = reader.read(file);
     assert.equal(second.rawSteps.length, 2);
     assert.equal(second.view.turns[0].items[0].text, 'Hello!');
+
+    // A /rewind replaces the file head. The replacement can be larger than the
+    // cached byte offset, so this must not append onto the pre-rewind steps.
+    const rewound = JSON.stringify({
+      step_index: 40,
+      source: 'USER_EXPLICIT',
+      type: 'USER_INPUT',
+      status: 'DONE',
+      content: `after rewind ${'x'.repeat(400)}`,
+    }) + '\n';
+    writeFileSync(file, rewound);
+    const third = reader.read(file);
+    assert.equal(third.rawSteps.length, 1);
+    assert.equal(third.rawSteps[0].step_index, 40);
+    assert.match(third.rawSteps[0].content, /^after rewind/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -347,6 +377,18 @@ test('Standalone server serves file-info, raw-file images, SSE hook stream, and 
 
     const unsafeRes = await fetch(`http://127.0.0.1:${port}/api/file-info?path=C:\\Windows\\System32\\drivers\\etc\\hosts`);
     assert.equal(unsafeRes.status, 403);
+
+    const pickerRes = await fetch(`http://127.0.0.1:${port}/api/file-picker`);
+    assert.equal(pickerRes.status, 200);
+    const pickerInfo = await pickerRes.json();
+    assert.equal(typeof pickerInfo.available, 'boolean');
+    if (process.platform === 'win32') {
+      assert.equal(pickerInfo.available, true);
+      assert.equal(pickerInfo.provider, 'powershell');
+    } else if (process.platform === 'darwin') {
+      assert.equal(pickerInfo.available, true);
+      assert.equal(pickerInfo.provider, 'osascript');
+    }
 
     await new Promise((resolveSse, rejectSse) => {
       let settled = false;
@@ -1221,6 +1263,40 @@ test('Interrupted turns mark unexecuted queued tools as canceled, invalidate Tra
   assert.equal(Boolean(continuedView.turns[1].interrupted), false);
 });
 
+test('viewport anchor phrase survives rendered and source text', () => {
+  const rendered = 'step 3000 (17 ep, loss=0.0012) 40.0% → step 5999 (34 ep, loss=0.0003) 75.0%';
+  const at = rendered.indexOf('40.0%');
+  const probe = anchorProbe(rendered, at + 2);
+  assert.match(probe, /40\.0%/);
+  assert.match(probe, /step 5999/);
+  const source = '（~17 ep, `loss=0.0012`）**40.0%** → `step 5999`（~34 ep, `loss=0.0003`）**75.0%**';
+  const found = locateAnchorProbe(normalizeAnchorText(source), probe);
+  assert.ok(found >= 0);
+  assert.equal(normalizeAnchorText(source).slice(found, found + 5), '40.0%');
+});
+
+test('approximation tildes stay literal and only ~~text~~ is strikethrough', () => {
+  assert.equal(escapeApproxTildes('~17 ep, ~34 ep'), '\\~17 ep, \\~34 ep');
+  assert.equal(escapeApproxTildes('keep ~~gone~~'), 'keep ~~gone~~');
+  assert.equal(escapeApproxTildes('already \\~17'), 'already \\~17');
+
+  const code = readFileSync(new URL('../public/vendor/marked.min.js', import.meta.url), 'utf8');
+  const sandbox = { console, module: { exports: {} }, exports: {} };
+  sandbox.globalThis = sandbox;
+  vm.runInNewContext(code, sandbox, { filename: 'marked.min.js' });
+  const markedApi = sandbox.module.exports;
+  globalThis.window = { marked: markedApi.marked ? markedApi : markedApi };
+
+  const html = renderMarkdownHtml('`step 3000`（~17 ep, `loss=0.0012`）**40.0%** → `step 5999`（~34 ep, `loss=0.0003`）**75.0%**');
+  assert.equal(html.includes('<del>'), false);
+  assert.match(html, /~17 ep/);
+  assert.match(html, /40\.0%/);
+  assert.match(html, /~34 ep/);
+
+  const struck = renderMarkdownHtml('keep ~~gone~~ please');
+  assert.match(struck, /<del>gone<\/del>/);
+});
+
 test('outlineLeadLabel uses the opening words when prose has no heading', () => {
   assert.equal(outlineLeadLabel(''), '');
   assert.equal(outlineLeadLabel('   '), '');
@@ -1469,4 +1545,126 @@ test('buildNormalizedView gives each /schedule wakeup its own turn', () => {
   assert.equal(orphan.turns[0].items.find((item) => item.kind === 'markdown').intermediate, false);
   assert.equal(orphan.turns[1].scheduleLabel, '定时巡检 #4');
   assert.equal(orphan.turns[1].user.request, '[定时巡检 #4 / +16h] 晨间汇总');
+});
+
+function sidebarGroup(key, sessions) {
+  const latestUpdatedAt = sessions.reduce((max, item) => Math.max(max, item.updatedAt || 0), 0);
+  return { key, label: key, latestUpdatedAt, items: sessions.map((item) => ({ ...item })) };
+}
+
+function sidebarKeys(groups, order) {
+  return sortGroupsBySidebarOrder(groups, order).map((group) => ({
+    key: group.key,
+    ids: group.items.map((item) => item.id),
+  }));
+}
+
+test('sidebar order stays fixed after open and new projects insert at the top', () => {
+  const order = createSidebarOrder();
+  const opened = [
+    sidebarGroup('A', [{ id: 'x', updatedAt: 300 }, { id: 'x2', updatedAt: 100 }]),
+    sidebarGroup('B', [{ id: 'y', updatedAt: 200 }]),
+    sidebarGroup('Unassigned', [{ id: 'u', updatedAt: 9999 }]),
+  ];
+  noteSidebarRoster(opened, order);
+  assert.deepEqual(sidebarKeys(opened, order), [
+    { key: 'A', ids: ['x', 'x2'] },
+    { key: 'B', ids: ['y'] },
+    { key: 'Unassigned', ids: ['u'] },
+  ]);
+
+  const racing = [
+    sidebarGroup('B', [{ id: 'y', updatedAt: 5000 }]),
+    sidebarGroup('A', [{ id: 'x2', updatedAt: 4000 }, { id: 'x', updatedAt: 300 }]),
+    sidebarGroup('Unassigned', [{ id: 'u', updatedAt: 9999 }]),
+  ];
+  noteSidebarRoster(racing, order);
+  assert.deepEqual(sidebarKeys(racing, order), [
+    { key: 'A', ids: ['x', 'x2'] },
+    { key: 'B', ids: ['y'] },
+    { key: 'Unassigned', ids: ['u'] },
+  ]);
+
+  const withNewProject = [
+    ...racing,
+    sidebarGroup('C', [{ id: 'z', updatedAt: 1 }]),
+  ];
+  noteSidebarRoster(withNewProject, order);
+  assert.deepEqual(sidebarKeys(withNewProject, order).map((group) => group.key), ['C', 'A', 'B', 'Unassigned']);
+
+  const withNewSession = [
+    sidebarGroup('C', [{ id: 'z', updatedAt: 1 }]),
+    sidebarGroup('A', [{ id: 'x3', updatedAt: 8000 }, { id: 'x', updatedAt: 300 }, { id: 'x2', updatedAt: 4000 }]),
+    sidebarGroup('B', [{ id: 'y', updatedAt: 5000 }]),
+    sidebarGroup('Unassigned', [{ id: 'u', updatedAt: 9999 }]),
+  ];
+  noteSidebarRoster(withNewSession, order);
+  assert.deepEqual(sidebarKeys(withNewSession, order), [
+    { key: 'C', ids: ['z'] },
+    { key: 'A', ids: ['x', 'x2', 'x3'] },
+    { key: 'B', ids: ['y'] },
+    { key: 'Unassigned', ids: ['u'] },
+  ]);
+
+  noteSidebarRoster([], order);
+  assert.deepEqual(order.projects, ['C', 'A', 'B', 'Unassigned']);
+});
+
+test('native file picker chooses the OS dialog and hides a missing Linux tool', async () => {
+  assert.deepEqual(pickerCandidates('win32').map((item) => item.id), ['powershell']);
+  assert.deepEqual(pickerCandidates('darwin').map((item) => item.id), ['osascript']);
+  assert.deepEqual(pickerCandidates('linux').map((item) => item.id), ['zenity', 'kdialog', 'qarma', 'yad']);
+  assert.deepEqual(pickerCandidates('freebsd'), []);
+
+  const powershell = buildPickerLaunch('powershell');
+  assert.equal(powershell.command, 'powershell.exe');
+  assert.ok(powershell.args.includes('-STA'));
+  assert.match(powershell.args.at(-1), /OpenFileDialog/);
+
+  const mac = buildPickerLaunch('osascript');
+  assert.equal(mac.command, 'osascript');
+  assert.match(mac.args[1], /choose file/);
+
+  const kde = buildPickerLaunch('kdialog');
+  assert.equal(kde.args[0], '--title');
+  assert.ok(kde.args.includes('--getopenfilename'));
+
+  assert.equal(cleanPickedPath('  "/tmp/a.md"\n'), '/tmp/a.md');
+  assert.deepEqual(interpretPickerOutput({ code: 1, stdout: '' }), { available: true, canceled: true, path: '' });
+  assert.deepEqual(interpretPickerOutput({ code: -1, stdout: '', errorCode: 'ENOENT' }), { available: false, canceled: false, path: '' });
+
+  const none = await resolveNativeFilePicker('linux', async () => false);
+  assert.equal(none, null);
+  const kdeOnly = await resolveNativeFilePicker('linux', async (command) => command === 'kdialog');
+  assert.equal(kdeOnly.id, 'kdialog');
+
+  function scriptedSpawn(stdout, code) {
+    return () => {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = { resume() {} };
+      queueMicrotask(() => {
+        if (stdout) child.stdout.emit('data', Buffer.from(stdout));
+        child.emit('close', code);
+      });
+      return child;
+    };
+  }
+
+  const picked = await runNativeFilePicker({
+    platform: 'linux',
+    exists: async (command) => command === 'zenity',
+    spawnImpl: scriptedSpawn('/home/me/notes.md\n', 0),
+  });
+  assert.equal(picked.provider, 'zenity');
+  assert.equal(picked.path, '/home/me/notes.md');
+  assert.equal(picked.canceled, false);
+
+  const canceled = await runNativeFilePicker({
+    platform: 'darwin',
+    exists: async () => true,
+    spawnImpl: scriptedSpawn('', 1),
+  });
+  assert.equal(canceled.canceled, true);
+  assert.equal(canceled.path, '');
 });

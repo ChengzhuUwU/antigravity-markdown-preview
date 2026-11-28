@@ -132,6 +132,7 @@
               </div>
             </div>
             <div class="side-preview-actions">
+              <div id="side-md-view" class="prefs-seg-group hidden" data-md-view-toggle="side"></div>
               <button id="side-reveal-btn" class="code-mini-btn" type="button" data-i18n="openFolderBtn" data-i18n-title="openFolderTip" title="Reveal file in system file manager">📂 Folder</button>
               <button id="side-promote-btn" class="code-mini-btn hidden" type="button" data-i18n="promoteMainBtn" data-i18n-title="promoteMainTip" title="Open as main document">⤢ Main</button>
               <button id="side-wrap-btn" class="code-mini-btn hidden" type="button" data-i18n="wrapBtn">Wrap</button>
@@ -169,6 +170,7 @@
         </div>
         <div class="side-preview-actions">
           <button id="popup-to-sidebar-btn" class="open-sidebar-pill" type="button" data-i18n="openInSidebar">Open in sidebar</button>
+          <div id="popup-md-view" class="prefs-seg-group hidden" data-md-view-toggle="popup"></div>
           <button id="popup-reveal-btn" class="code-mini-btn" type="button" data-i18n="openFolderBtn" data-i18n-title="openFolderTip" title="Reveal file in system file manager">📂 Folder</button>
           <button id="popup-wrap-btn" class="code-mini-btn hidden" type="button" data-i18n="wrapBtn">Wrap</button>
           <button id="popup-copy-btn" class="code-mini-btn" type="button" data-i18n="copyBtn">Copy</button>
@@ -283,7 +285,7 @@
         document.body.appendChild(s);
         return;
       }
-      const files = ['js/i18n.js', 'js/markdown.js', 'js/doc-viewers.js', 'js/transcript-view.js', 'js/app.js'];
+      const files = ['js/i18n.js', 'js/markdown.js', 'js/doc-viewers.js', 'js/transcript-view.js', 'js/sidebar-order.js', 'js/app.js'];
       const sources = {};
       await Promise.all(files.map(async (f) => {
         const res = await fetch('/' + f);

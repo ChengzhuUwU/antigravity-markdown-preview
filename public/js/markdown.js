@@ -173,6 +173,56 @@ export function buildRawFileUrl(rawPath, baseDir = '') {
   return `/api/raw-file?${qs.toString()}`;
 }
 
+/**
+ * Marked treats a single `~` as strikethrough (`~~?` in its GFM rule).
+ * Approximation marks such as `~17 ep` then pair with the next `~` and draw a
+ * line through the text between them. Real strikethrough stays `~~text~~`.
+ */
+const ANCHOR_MARKUP = /[`*_~#]/;
+
+export function isAnchorMarkup(ch) {
+  return ANCHOR_MARKUP.test(ch);
+}
+
+/** Visible prose used to match a spot between rendered Markdown and its source. */
+export function normalizeAnchorText(text) {
+  return String(text ?? '')
+    .replace(new RegExp(ANCHOR_MARKUP.source, 'g'), '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/** A short normalized phrase around a raw-text offset. */
+export function anchorProbe(text, offset, radius = 42) {
+  const raw = String(text ?? '');
+  const at = Math.max(0, Math.min(raw.length, Number(offset) || 0));
+  const slice = raw.slice(Math.max(0, at - radius), Math.min(raw.length, at + radius));
+  const norm = normalizeAnchorText(slice);
+  if (norm.length >= 12) return norm;
+  return normalizeAnchorText(raw.slice(Math.max(0, at - radius * 3), Math.min(raw.length, at + radius * 3))).slice(0, 96);
+}
+
+/** Index of the probe inside already-normalized text, shrinking from both ends if needed. */
+export function locateAnchorProbe(haystackNorm, probe) {
+  const hay = String(haystackNorm ?? '');
+  let needle = String(probe ?? '').trim();
+  if (!hay || !needle) return -1;
+  while (needle.length >= 8) {
+    const at = hay.indexOf(needle);
+    if (at >= 0) return at;
+    if (needle.length === 8) break;
+    needle = needle.slice(1, -1);
+  }
+  return -1;
+}
+
+export function escapeApproxTildes(text) {
+  return String(text ?? '').replace(/(^|[^\\])(~+)/g, (full, lead, run) => {
+    if (run.length % 2 === 0) return full;
+    return `${lead}${'~'.repeat(run.length - 1)}\\~`;
+  });
+}
+
 export function fixCjkEmphasis(text) {
   const parts = String(text ?? '').split(/(`[^`]*`)/g);
   for (let i = 0; i < parts.length; i += 2) {
@@ -214,6 +264,7 @@ function extractMathAndCode(source) {
       return `\uE000MATH_INLINE_${idx}\uE001`;
     });
 
+    seg = escapeApproxTildes(seg);
     codeSegments[i] = fixCjkEmphasis(seg);
   }
 

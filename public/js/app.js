@@ -2,6 +2,9 @@ import { applyStaticI18n, getLang, setLang, t } from './i18n.js';
 import {
   escapeHtml,
   slugifyHeading,
+  anchorProbe,
+  isAnchorMarkup,
+  locateAnchorProbe,
   renderMarkdownHtml,
   enhanceMarkdownDom,
   attachCodeCardInteractions,
@@ -17,6 +20,7 @@ import {
   renderPresentationViewer,
 } from './doc-viewers.js';
 import { TranscriptRenderer, appendLeadOutlineItem, formatCompactTokens, renderCliInsightsHtml } from './transcript-view.js';
+import { createSidebarOrder, noteSidebarRoster, sortGroupsBySidebarOrder } from './sidebar-order.js';
 
 const isSidecar = Boolean(window.sidecar && typeof window.sidecar.fetch === 'function');
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
@@ -325,6 +329,9 @@ const state = {
   sidebarPointerInside: false,
   sidebarMouseDown: false,
   sidebarDirtyWhileHovered: false,
+  sidebarOrder: createSidebarOrder(),
+  filePickerAvailable: true,
+  mdSource: localStorage.getItem('amp-md-source') === '1',
   pendingFocusTarget: null,
   pendingDecisionAlert: null,
   seenDecisionKeys: (() => {
@@ -1038,26 +1045,32 @@ function applyLanguage(nextLang) {
 
   if (state.mode === 'sessions' && transcriptRenderer?.lastView) {
     transcriptRenderer._rerenderCurrent();
-  } else if (state.mode === 'docs') {
+  } else   if (state.mode === 'docs') {
     if (state.currentCustomDoc) {
+      const docAnchor = captureViewportAnchor(el('reader-scroll'), document.querySelector('#reader-column [data-md-stage]'));
       renderCustomPreview(state.currentCustomDoc);
+      restoreViewportAnchor(el('reader-scroll'), document.querySelector('#reader-column [data-md-stage]'), docAnchor);
     } else {
       el('doc-title').textContent = t('tabDocs');
-      el('reader-column').innerHTML = `<div class="empty-state"><strong>${escapeHtml(t('docsEmptyTitle'))}</strong><span>${t('docsEmptyHint')}</span></div>`;
+      el('reader-column').innerHTML = `<div class="empty-state"><strong>${escapeHtml(t('docsEmptyTitle'))}</strong><span>${t(state.filePickerAvailable ? 'docsEmptyHint' : 'docsEmptyHintNoPicker')}</span></div>`;
     }
   }
   if (state.sideCurrent && !el('side-preview-pane')?.classList.contains('hidden')) {
     if (state.sideCurrent.kind === 'directory') {
       browseFolderInPreview(state.sideCurrent.path, '', 'sidebar');
     } else {
-      populatePreviewBody(el('side-preview-body'), state.sideCurrent, 'side-code-view');
+      const sideBody = el('side-preview-body');
+      sideBody._pendingMdAnchor = captureViewportAnchor(sideBody, sideBody?.querySelector('[data-md-stage]'));
+      populatePreviewBody(sideBody, state.sideCurrent, 'side-code-view');
     }
   }
   if (state.popupCurrent && !el('file-preview-modal')?.classList.contains('hidden')) {
     if (state.popupCurrent.kind === 'directory') {
       browseFolderInPreview(state.popupCurrent.path, '', 'popup');
     } else {
-      populatePreviewBody(el('popup-preview-body'), state.popupCurrent, 'popup-code-view');
+      const popupBody = el('popup-preview-body');
+      popupBody._pendingMdAnchor = captureViewportAnchor(popupBody, popupBody?.querySelector('[data-md-stage]'));
+      populatePreviewBody(popupBody, state.popupCurrent, 'popup-code-view');
     }
   }
   if (state.pendingFocusTarget && !el('app-toast')?.classList.contains('hidden')) {
@@ -1496,6 +1509,22 @@ function showDocHoverPopover(docId, cardEl) {
   pop.style.top = `${Math.round(top)}px`;
 }
 
+function groupConversations(list) {
+  const groupsMap = new Map();
+  for (const c of list || []) {
+    const projectLabel = resolveProjectLabel(c);
+    let grp = groupsMap.get(projectLabel);
+    if (!grp) {
+      grp = { key: projectLabel, label: projectLabel, workspaceUri: c.workspaceUri || '', latestUpdatedAt: 0, items: [] };
+      groupsMap.set(projectLabel, grp);
+    }
+    if (!grp.workspaceUri && c.workspaceUri) grp.workspaceUri = c.workspaceUri;
+    grp.items.push(c);
+    if ((c.updatedAt || 0) > grp.latestUpdatedAt) grp.latestUpdatedAt = c.updatedAt || 0;
+  }
+  return Array.from(groupsMap.values());
+}
+
 function renderSidebarList() {
   state.sidebarDirtyWhileHovered = false;
   if (bgSidebarRenderTimer) {
@@ -1515,7 +1544,7 @@ function renderSidebarList() {
       (p.excerpt || '').toLowerCase().includes(query)
     );
     if (filtered.length === 0) {
-      container.innerHTML = `<div style="padding:16px 10px;font-size:0.78rem;color:var(--text-faint);">${t('noDocsYet')}</div>`;
+      container.innerHTML = `<div style="padding:16px 10px;font-size:0.78rem;color:var(--text-faint);">${t(state.filePickerAvailable ? 'noDocsYet' : 'noDocsYetNoPicker')}</div>`;
       return;
     }
 
@@ -1579,31 +1608,14 @@ function renderSidebarList() {
     );
   });
 
+  noteSidebarRoster(groupConversations(state.conversations), state.sidebarOrder);
+
   if (filtered.length === 0) {
     container.innerHTML = `<div style="padding:16px 10px;font-size:0.78rem;color:var(--text-faint);">${escapeHtml(t('noSessionsMatch'))}</div>`;
     return;
   }
 
-  const groupsMap = new Map();
-  for (const c of filtered) {
-    const projectLabel = resolveProjectLabel(c);
-    let grp = groupsMap.get(projectLabel);
-    if (!grp) {
-      grp = { key: projectLabel, label: projectLabel, workspaceUri: c.workspaceUri || '', latestUpdatedAt: 0, items: [] };
-      groupsMap.set(projectLabel, grp);
-    }
-    if (!grp.workspaceUri && c.workspaceUri) grp.workspaceUri = c.workspaceUri;
-    grp.items.push(c);
-    if ((c.updatedAt || 0) > grp.latestUpdatedAt) {
-      grp.latestUpdatedAt = c.updatedAt || 0;
-    }
-  }
-
-  const sortedGroups = Array.from(groupsMap.values()).sort((a, b) => {
-    if (a.key === 'Unassigned' && b.key !== 'Unassigned') return 1;
-    if (b.key === 'Unassigned' && a.key !== 'Unassigned') return -1;
-    return b.latestUpdatedAt - a.latestUpdatedAt;
-  });
+  const sortedGroups = sortGroupsBySidebarOrder(groupConversations(filtered), state.sidebarOrder);
 
   const cutoffMs = Date.now() - THREE_DAYS_MS;
 
@@ -1640,7 +1652,6 @@ function renderSidebarList() {
   let anyOpen = false;
 
   const projectsHtml = sortedGroups.map((grp) => {
-    grp.items.sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     const activeWithin3d = grp.latestUpdatedAt >= cutoffMs;
     const containsActiveConv = grp.items.some((s) => s.id === state.activeConvId);
 
@@ -2381,7 +2392,272 @@ function bindMediaStageControls(bodyEl) {
   }
 }
 
+function markdownViewToggleInnerHtml() {
+  const source = state.mdSource;
+  return `<button type="button" class="prefs-seg-btn ${source ? '' : 'active'}" data-md-view="rendered">${escapeHtml(t('mdViewRendered'))}</button><button type="button" class="prefs-seg-btn ${source ? 'active' : ''}" data-md-view="source">${escapeHtml(t('mdViewSource'))}</button>`;
+}
+
+function syncMarkdownViewControls() {
+  const html = markdownViewToggleInnerHtml();
+  const tip = t('mdViewTip');
+  document.querySelectorAll('[data-md-view-toggle]').forEach((node) => {
+    node.title = tip;
+    node.innerHTML = html;
+  });
+  const showSide = Boolean(el('side-preview-body')?.querySelector('[data-md-stage]'));
+  el('side-md-view')?.classList.toggle('hidden', !showSide);
+  const showPopup = Boolean(el('popup-preview-body')?.querySelector('[data-md-stage]'));
+  el('popup-md-view')?.classList.toggle('hidden', !showPopup);
+}
+
+function collectHeadingToc(container, idPrefix) {
+  const toc = [];
+  const seenIds = new Set();
+  let hIdx = 0;
+  const headings = container.querySelectorAll('h1, h2, h3, h4, h5, h6');
+  if (!headings.length) {
+    appendLeadOutlineItem(toc, container, { anchorId: `${idPrefix}-lead`, level: 1, seenIds });
+    return toc;
+  }
+  headings.forEach((h) => {
+    if (!h.id || seenIds.has(h.id)) h.id = `${idPrefix}-h-${++hIdx}`;
+    seenIds.add(h.id);
+    const txt = h.textContent.trim();
+    const level = Math.min(3, Number(h.tagName.slice(1)) || 1);
+    toc.push({ id: h.id, label: txt, fullTitle: txt, level, isTurn: false });
+  });
+  return toc;
+}
+
+function buildMarkdownSource(markdown, idPrefix) {
+  const pre = document.createElement('pre');
+  pre.className = 'md-source-view';
+  const toc = [];
+  const lines = String(markdown ?? '').split('\n');
+  let inFence = false;
+  lines.forEach((line, index) => {
+    if (index > 0) pre.appendChild(document.createTextNode('\n'));
+    const fence = line.trim().match(/^(```+|~~~+)/);
+    if (fence) inFence = !inFence;
+    const heading = !inFence && line.match(/^(#{1,6})[ \t]+(.+?)\s*#*\s*$/);
+    if (heading) {
+      const span = document.createElement('span');
+      span.id = `${idPrefix}-src-${toc.length + 1}`;
+      span.textContent = line;
+      pre.appendChild(span);
+      const label = heading[2].replace(/[*_`~]/g, '').trim();
+      toc.push({
+        id: span.id,
+        label,
+        fullTitle: label,
+        level: Math.min(3, heading[1].length),
+        isTurn: false,
+      });
+    } else {
+      pre.appendChild(document.createTextNode(line));
+    }
+  });
+  if (!toc.length) {
+    appendLeadOutlineItem(toc, pre, { anchorId: `${idPrefix}-src-lead`, level: 1, seenIds: new Set() });
+  }
+  return { node: pre, toc };
+}
+
+function renderMarkdownInto(host) {
+  const markdown = host._mdSource || '';
+  const baseDir = host._mdBaseDir || '';
+  const sourceMode = state.mdSource;
+  host.innerHTML = '';
+  if (sourceMode) {
+    const built = buildMarkdownSource(markdown, host._mdPrefix || 'md');
+    host.appendChild(built.node);
+    return built.toc;
+  }
+
+  const article = document.createElement('article');
+  article.className = 'assistant-markdown';
+  let md = markdown;
+  const thinkBlocks = [];
+  if (host._mdExtractThink) {
+    md = md.replace(/<(think|thinking|thought)>([\s\S]*?)<\/\1>/gi, (_, __, inner) => {
+      const idx = thinkBlocks.length;
+      thinkBlocks.push(inner.trim());
+      return `\n\n<div data-think-slot="${idx}"></div>\n\n`;
+    });
+  }
+  article.innerHTML = renderMarkdownHtml(md, { baseDir });
+  article.querySelectorAll('[data-think-slot]').forEach((slot) => {
+    const text = thinkBlocks[Number(slot.dataset.thinkSlot)] || '';
+    const details = document.createElement('details');
+    details.className = 'disclosure-card thinking-card';
+    details.innerHTML = `<summary class="disclosure-trigger" style="list-style:none;">
+      <span class="thinking-label">${escapeHtml(t('thoughtLabel'))}</span>
+      <span class="thinking-preview">${escapeHtml(text.split(/\r?\n/)[0] || '')}</span>
+    </summary><div class="thinking-body assistant-markdown" style="display:block;">${renderMarkdownHtml(text, { baseDir })}</div>`;
+    slot.replaceWith(details);
+  });
+  enhanceMarkdownDom(article, resolvedTheme());
+  host.appendChild(article);
+  return collectHeadingToc(article, host._mdPrefix || 'md');
+}
+
+function caretAtPoint(x, y) {
+  if (document.caretPositionFromPoint) {
+    const pos = document.caretPositionFromPoint(x, y);
+    if (pos?.offsetNode) return { node: pos.offsetNode, offset: pos.offset };
+  }
+  if (document.caretRangeFromPoint) {
+    const range = document.caretRangeFromPoint(x, y);
+    if (range) return { node: range.startContainer, offset: range.startOffset };
+  }
+  return null;
+}
+
+function textOffsetInRoot(root, node, offset) {
+  if (!root || !node || !root.contains(node)) return null;
+  let target = node;
+  let targetOffset = offset;
+  if (target.nodeType !== Node.TEXT_NODE) {
+    const el = target.nodeType === Node.ELEMENT_NODE ? target : target.parentElement;
+    const first = el ? document.createTreeWalker(el, NodeFilter.SHOW_TEXT).nextNode() : null;
+    if (!first) return null;
+    target = first;
+    targetOffset = 0;
+  }
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let count = 0;
+  let current = walker.nextNode();
+  while (current) {
+    if (current === target) return count + Math.max(0, Math.min(targetOffset, current.nodeValue.length));
+    count += current.nodeValue.length;
+    current = walker.nextNode();
+  }
+  return null;
+}
+
+function captureViewportAnchor(scrollEl, contentEl) {
+  if (!scrollEl || !contentEl) return null;
+  const max = Math.max(1, scrollEl.scrollHeight - scrollEl.clientHeight);
+  const ratio = scrollEl.scrollTop / max;
+  const view = scrollEl.getBoundingClientRect();
+  const content = contentEl.getBoundingClientRect();
+  const x = Math.min(Math.max(content.left + 28, view.left + 12), view.right - 12);
+  const y = view.top + view.height / 2;
+  let offset = null;
+  for (const dy of [0, -36, 36, -84, 84]) {
+    const hit = caretAtPoint(x, y + dy);
+    offset = hit ? textOffsetInRoot(contentEl, hit.node, hit.offset) : null;
+    if (offset != null) break;
+  }
+  const probe = offset == null ? '' : anchorProbe(contentEl.textContent || '', offset);
+  return { probe, ratio };
+}
+
+function normalizedIndexMap(root) {
+  const entries = [];
+  let norm = '';
+  let lastSpace = true;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    const value = node.nodeValue || '';
+    for (let i = 0; i < value.length; i++) {
+      const ch = value[i];
+      if (isAnchorMarkup(ch)) continue;
+      if (/\s/.test(ch)) {
+        if (lastSpace) continue;
+        norm += ' ';
+        entries.push({ node, offset: i });
+        lastSpace = true;
+        continue;
+      }
+      norm += ch;
+      entries.push({ node, offset: i });
+      lastSpace = false;
+    }
+    node = walker.nextNode();
+  }
+  let start = 0;
+  while (start < norm.length && norm[start] === ' ') start += 1;
+  let end = norm.length;
+  while (end > start && norm[end - 1] === ' ') end -= 1;
+  return { norm: norm.slice(start, end), entries: entries.slice(start, end) };
+}
+
+function scrollDomPointToCenter(scrollEl, node, offset) {
+  if (!scrollEl || !node || node.nodeType !== Node.TEXT_NODE) return;
+  const range = document.createRange();
+  const safe = Math.max(0, Math.min(offset, node.nodeValue.length));
+  range.setStart(node, safe);
+  range.collapse(true);
+  const rect = range.getClientRects()[0] || range.getBoundingClientRect();
+  if (!rect) return;
+  const view = scrollEl.getBoundingClientRect();
+  const delta = (rect.top + Math.max(rect.height, 1) / 2) - (view.top + view.height / 2);
+  const previous = scrollEl.style.scrollBehavior;
+  scrollEl.style.scrollBehavior = 'auto';
+  scrollEl.scrollTop += delta;
+  scrollEl.style.scrollBehavior = previous;
+}
+
+function restoreViewportAnchor(scrollEl, contentEl, anchor) {
+  if (!scrollEl || !contentEl || !anchor) return;
+  const apply = () => {
+    const mapped = normalizedIndexMap(contentEl);
+    const at = locateAnchorProbe(mapped.norm, anchor.probe);
+    const entry = at >= 0 ? mapped.entries[Math.min(at, mapped.entries.length - 1)] : null;
+    if (entry) {
+      scrollDomPointToCenter(scrollEl, entry.node, entry.offset);
+      return;
+    }
+    const max = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+    const previous = scrollEl.style.scrollBehavior;
+    scrollEl.style.scrollBehavior = 'auto';
+    scrollEl.scrollTop = (anchor.ratio || 0) * max;
+    scrollEl.style.scrollBehavior = previous;
+  };
+  apply();
+  requestAnimationFrame(apply);
+  contentEl.querySelectorAll('img').forEach((img) => {
+    if (!img.complete) img.addEventListener('load', apply, { once: true });
+  });
+}
+
+function listMarkdownSurfaces() {
+  const surfaces = [];
+  const main = document.querySelector('#reader-column [data-md-stage]');
+  if (main) surfaces.push({ host: main, scrollEl: el('reader-scroll'), updateToc: true });
+  const side = el('side-preview-body')?.querySelector('[data-md-stage]');
+  if (side) surfaces.push({ host: side, scrollEl: el('side-preview-body'), updateToc: false });
+  const popup = el('popup-preview-body')?.querySelector('[data-md-stage]');
+  if (popup) surfaces.push({ host: popup, scrollEl: el('popup-preview-body'), updateToc: false });
+  return surfaces;
+}
+
+function setMarkdownSourceMode(source) {
+  const next = Boolean(source);
+  if (next === state.mdSource) return;
+  const surfaces = listMarkdownSurfaces();
+  const anchors = surfaces.map((item) => captureViewportAnchor(item.scrollEl, item.host));
+  state.mdSource = next;
+  try { localStorage.setItem('amp-md-source', next ? '1' : '0'); } catch {}
+  surfaces.forEach((item, index) => {
+    const toc = renderMarkdownInto(item.host);
+    if (item.updateToc) renderToc(toc);
+    restoreViewportAnchor(item.scrollEl, item.host, anchors[index]);
+  });
+  syncMarkdownViewControls();
+}
+
 function populatePreviewBody(bodyEl, info, codeViewId) {
+  try {
+    populatePreviewBodyNow(bodyEl, info, codeViewId);
+  } finally {
+    if (!bodyEl?.querySelector('[data-md-stage]')) syncMarkdownViewControls();
+  }
+}
+
+function populatePreviewBodyNow(bodyEl, info, codeViewId) {
   if (info.kind === 'image') {
     bodyEl.innerHTML = `<div style="display:flex;flex-direction:column;align-items:center;gap:12px;">
       <img src="${escapeHtml(info.rawUrl)}" alt="${escapeHtml(info.filename)}" class="md-image" data-zoomable="true" style="max-height:74vh;">
@@ -2508,18 +2784,27 @@ function populatePreviewBody(bodyEl, info, codeViewId) {
   }
 
   if (info.kind === 'markdown') {
-    const article = document.createElement('article');
-    article.className = 'assistant-markdown';
-    article.innerHTML = renderMarkdownHtml(info.content || '', { baseDir: info.baseDir });
-    enhanceMarkdownDom(article, resolvedTheme());
+    const stage = document.createElement('div');
+    stage.dataset.mdStage = '1';
+    stage._mdSource = info.content || '';
+    stage._mdBaseDir = info.baseDir || '';
+    stage._mdPrefix = bodyEl.id === 'side-preview-body' ? 'side' : (bodyEl.id === 'popup-preview-body' ? 'pop' : 'doc');
+    stage._mdExtractThink = false;
+    const pendingAnchor = bodyEl._pendingMdAnchor || null;
+    delete bodyEl._pendingMdAnchor;
     bodyEl.innerHTML = '';
-    bodyEl.appendChild(article);
-    bodyEl.scrollTop = 0;
-
-    if (info.hash) {
-      const decoded = decodeURIComponent(info.hash);
-      const target = article.querySelector(`#${CSS.escape(decoded)}`) || article.querySelector(`#${CSS.escape(slugifyHeading(decoded))}`);
-      requestAnimationFrame(() => target?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    bodyEl.appendChild(stage);
+    renderMarkdownInto(stage);
+    syncMarkdownViewControls();
+    if (pendingAnchor) {
+      restoreViewportAnchor(bodyEl, stage, pendingAnchor);
+    } else {
+      bodyEl.scrollTop = 0;
+      if (!state.mdSource && info.hash) {
+        const decoded = decodeURIComponent(info.hash);
+        const target = stage.querySelector(`#${CSS.escape(decoded)}`) || stage.querySelector(`#${CSS.escape(slugifyHeading(decoded))}`);
+        requestAnimationFrame(() => target?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+      }
     }
     return;
   }
@@ -2604,49 +2889,21 @@ function renderCustomPreview(doc) {
     return;
   }
 
-  const container = document.createElement('article');
-  container.className = 'assistant-markdown';
-
-  let md = doc.parsed?.markdown ?? doc.rawText ?? '';
-  const thinkBlocks = [];
-  md = md.replace(/<(think|thinking|thought)>([\s\S]*?)<\/\1>/gi, (_, __, inner) => {
-    const idx = thinkBlocks.length;
-    thinkBlocks.push(inner.trim());
-    return `\n\n<div data-think-slot="${idx}"></div>\n\n`;
-  });
-
-  container.innerHTML = renderMarkdownHtml(md, { baseDir: state.currentBaseDir });
-
-  container.querySelectorAll('[data-think-slot]').forEach((slot) => {
-    const text = thinkBlocks[Number(slot.dataset.thinkSlot)] || '';
-    const details = document.createElement('details');
-    details.className = 'disclosure-card thinking-card';
-    details.innerHTML = `<summary class="disclosure-trigger" style="list-style:none;">
-      <span class="thinking-label">${escapeHtml(t('thoughtLabel'))}</span>
-      <span class="thinking-preview">${escapeHtml(text.split(/\r?\n/)[0] || '')}</span>
-    </summary><div class="thinking-body assistant-markdown" style="display:block;">${renderMarkdownHtml(text, { baseDir: state.currentBaseDir })}</div>`;
-    slot.replaceWith(details);
-  });
-
-  enhanceMarkdownDom(container, resolvedTheme());
-  column.appendChild(container);
-
-  const toc = [];
-  const seenIds = new Set();
-  let hIdx = 0;
-  const headings = container.querySelectorAll('h1, h2, h3, h4, h5, h6');
-  if (!headings.length) {
-    appendLeadOutlineItem(toc, container, { anchorId: 'doc-body-lead', level: 1, seenIds });
-  } else {
-    headings.forEach((h) => {
-      if (!h.id || seenIds.has(h.id)) h.id = `md-hd-${++hIdx}`;
-      seenIds.add(h.id);
-      const txt = h.textContent.trim();
-      const level = Math.min(3, Number(h.tagName.slice(1)) || 1);
-      toc.push({ id: h.id, label: txt, fullTitle: txt, level, isTurn: false });
-    });
-  }
-  renderToc(toc);
+  const stage = document.createElement('div');
+  stage.dataset.mdStage = '1';
+  stage._mdSource = doc.parsed?.markdown ?? doc.rawText ?? '';
+  stage._mdBaseDir = state.currentBaseDir;
+  stage._mdPrefix = 'doc';
+  stage._mdExtractThink = true;
+  column.appendChild(stage);
+  const viewToggle = document.createElement('div');
+  viewToggle.id = 'doc-md-view';
+  viewToggle.className = 'prefs-seg-group';
+  viewToggle.dataset.mdViewToggle = 'doc';
+  viewToggle.style.marginLeft = 'auto';
+  baseBanner.querySelector('div')?.appendChild(viewToggle);
+  renderToc(renderMarkdownInto(stage));
+  syncMarkdownViewControls();
 }
 
 function showEmptyDocsStage() {
@@ -2660,7 +2917,7 @@ function showEmptyDocsStage() {
   updateModeButtons();
   renderSidebarList();
   el('doc-title').textContent = t('tabDocs');
-  el('reader-column').innerHTML = `<div class="empty-state"><strong>${escapeHtml(t('docsEmptyTitle'))}</strong><span>${t('docsEmptyHint')}</span></div>`;
+  el('reader-column').innerHTML = `<div class="empty-state"><strong>${escapeHtml(t('docsEmptyTitle'))}</strong><span>${t(state.filePickerAvailable ? 'docsEmptyHint' : 'docsEmptyHintNoPicker')}</span></div>`;
   renderToc([]);
   connectSSE();
 }
@@ -3281,11 +3538,37 @@ async function submitCustomPreview({ id, title, content, mode, filePath, dropped
   await openCustomPreview(doc.id);
 }
 
+function applyFilePickerAvailability() {
+  const hide = state.filePickerAvailable === false;
+  el('docs-browse-btn')?.classList.toggle('hidden', hide);
+  el('paste-browse-btn')?.classList.toggle('hidden', hide);
+}
+
+async function refreshFilePickerAvailability() {
+  try {
+    const res = await apiFetch('/api/file-picker');
+    if (!res.ok) return;
+    const data = await res.json();
+    state.filePickerAvailable = Boolean(data.available);
+  } catch {
+    return;
+  }
+  applyFilePickerAvailability();
+  if (state.mode === 'docs') renderSidebarList();
+}
+
 async function pickNativeFile() {
   try {
     const res = await apiFetch('/api/pick-file', { method: 'POST' });
     if (!res.ok) return;
     const data = await res.json();
+    if (data.available === false) {
+      state.filePickerAvailable = false;
+      applyFilePickerAvailability();
+      showToast(t('pickerUnavailable'), true);
+      if (state.mode === 'docs') renderSidebarList();
+      return;
+    }
     if (!data.canceled && data.entry) {
       el('paste-modal')?.classList.add('hidden');
       await loadCustomPreviews();
@@ -3350,7 +3633,7 @@ async function loadInitialWorkspaceContent() {
   if (urlFlavor) state.flavor = urlFlavor;
 
   await loadFlavors();
-  await Promise.all([loadConversations(), loadCustomPreviews(), loadServerCustomPalettes()]);
+  await Promise.all([loadConversations(), loadCustomPreviews(), loadServerCustomPalettes(), refreshFilePickerAvailability()]);
 
   let tabMode = '';
   let tabConv = '';
@@ -3971,6 +4254,12 @@ async function bootstrap() {
 
   el('sync-btn')?.addEventListener('click', manualSync);
   el('export-btn')?.addEventListener('click', exportCurrentMarkdown);
+  document.addEventListener('click', (e) => {
+    const viewBtn = e.target.closest('[data-md-view]');
+    if (!viewBtn) return;
+    e.preventDefault();
+    setMarkdownSourceMode(viewBtn.dataset.mdView === 'source');
+  });
 
   el('jump-top-btn')?.addEventListener('click', () => {
     el('reader-scroll')?.scrollTo({ top: 0, behavior: 'smooth' });

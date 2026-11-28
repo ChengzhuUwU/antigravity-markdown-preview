@@ -787,6 +787,20 @@ html, body {
   gap: 18px;
 }
 
+.md-source-view {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: calc(0.84rem * var(--reader-scale, 1));
+  line-height: 1.65;
+  color: var(--text-main);
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px 18px 28px;
+}
+
 .session-ribbon {
   display: flex;
   flex-wrap: wrap;
@@ -1579,7 +1593,7 @@ code, kbd, samp {
   font-size: 0.88em;
 }
 
-/* Expanded Table Mode: columns expand naturally up to 50vw without squishing, scrolled via horizontal slider */
+/* Expanded table mode: natural width, one column at most 30vw, then a horizontal slider. */
 html[data-tables="expand"] .table-card:not(.force-compact) table,
 .table-card.expanded table {
   width: max-content;
@@ -1589,13 +1603,13 @@ html[data-tables="expand"] .table-card:not(.force-compact) table,
 html[data-tables="expand"] .table-card:not(.force-compact) th,
 .table-card.expanded th {
   white-space: nowrap;
-  max-width: 50vw;
+  max-width: 30vw;
 }
 
 html[data-tables="expand"] .table-card:not(.force-compact) td,
 .table-card.expanded td {
   min-width: 110px;
-  max-width: 50vw;
+  max-width: 30vw;
   white-space: normal;
   word-break: normal;
   overflow-wrap: break-word;

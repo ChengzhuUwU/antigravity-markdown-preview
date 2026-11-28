@@ -28,7 +28,7 @@ Transform dense terminal streams, 1,000+ step agent trajectories, LaTeX math, wi
   - Dedicated **`Docs / Clips`** workspace persisted in OS user data (`%APPDATA%/agy-session-preview` on Windows, `~/Library/Application Support/agy-session-preview` on macOS, `~/.local/share/agy-session-preview` on Linux; legacy `agy-markdown-preview` data is automatically migrated) featuring pointer-hover previews, drag-and-drop sorting, inline renaming, and cross-platform native file picking.
 - **Publication-Grade Offline Markdown & Adaptive Mermaid v12 ELK**:
   - Zero-CDN offline `marked` + `highlight.js` + `KaTeX` (`$...$`, `$$...$$`, `\(...\)`, `\[...\]`) + **Mermaid v12 (`ELK` orthogonal port routing, rounded 90° elbows, multi-stage pastel pills, adaptive horizontal-fill inline sizing + `↔ Expand` full-viewport toggle, interactive pan/zoom, edge/corner user-resizable fullscreen modal with `↔ Fit Width` & `100%` full-window toggle, and vector SVG export)**.
-  - Accurate GitHub & Obsidian Alerts (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`), CJK bold punctuation fix, and **Expandable Wide Tables** (`Tables: Expand` — natural column expansion capped at `50vw` with smooth horizontal slider).
+  - Accurate GitHub & Obsidian Alerts (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`), CJK bold punctuation fix, and **Expandable Wide Tables** (`Tables: Expand` — natural column expansion capped at `30vw` with smooth horizontal slider).
 
 ## Screenshots
 

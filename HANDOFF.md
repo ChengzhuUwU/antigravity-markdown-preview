@@ -1,6 +1,6 @@
 # HANDOFF — Antigravity Session Preview (`agy-session-preview`)
 
-> **Last Updated**: 2026-11-26
+> **Last Updated**: 2026-11-28
 > **Current Version**: `v0.4.1` (Synced with `origin/main`)
 > **Repository**: `E:\OpenSources2\agy_plugin\antigravity-markdown-preview`
 > **Remote**: `git@github.com:ChengzhuUwU/antigravity-session-preview.git` (`https://github.com/ChengzhuUwU/antigravity-session-preview`)
@@ -25,7 +25,8 @@ This document provides complete architectural context, user UX contracts, platfo
 
 | Date | Tag / Version | Commit | Highlights |
 |---|---|---|---|
-| 2026-11-27 | unreleased | `HEAD` | `/schedule` wakeups render as their own turns (`定时巡检 #N` on the card and in the Outline); user-turn indexes still count only user messages |
+| 2026-11-28 | unreleased | `HEAD` | OS-native file dialog with a Linux fallback chain; sidebar project/session order frozen for the open window; Markdown `Rendered` / `Source` toggle that keeps the viewport center; lone `~` is not strikethrough; transcript cache drops a rewritten head (`/rewind`); `Tables: Expand` column cap is `30vw` |
+| 2026-11-27 | unreleased | `d9de923` | `/schedule` wakeups render as their own turns (`定时巡检 #N` on the card and in the Outline); user-turn indexes still count only user messages |
 | 2026-11-26 | unreleased | `d9a9d66` | Outline lead-label fallback for heading-less replies (`h4`–`h6` included, clamped to level 3); per-turn `Copy prompt` / `Copy response` plus 6-line fold for long user input; per-conversation right file sidebar and `/btw` · `/context` · `/usage` tab (in-page memory only) |
 | 2026-11-26 | `v0.4.1` | `55f01ae` | Interactive user-decision prompts (`ask_question` & `exit_plan_mode` cards + `⏳ Awaiting Decision` topbar/sidebar/toast alerts); interrupted/canceled turn detection (`USER_CANCELED` + SQLite idle sync + `TranscriptReader` cache invalidation + non-streaming execution/command output copy); navigation race/jump fixes (`--focus` vs non-intrusive switch toast, in-place `--restart`, per-tab `sessionStorage`, sidebar hover freeze); left-sidebar top-left collapse button for narrow windows |
 | 2026-11-26 | `v0.4.0` | `ce34cb7` | Custom theme-native `PDF.js v4` + offline Office (`Word .docx/.doc`, `Excel .xlsx/.xls/.ods`, `PowerPoint .pptx/.ppt`) viewers; 3-state session status (Apple 12-spoke spinner + `Unread` completed highlight); `Font Size` (`12px–24px` + `↺`) + decoupled `Latin × CJK` collapsible font pickers (`Times New Roman`, `华文宋体`, `楷体`, `仿宋`); multi-candidate named Custom RGB palettes (`custom-palettes.json`); live `update_steps` checklist & `agy-preview --restart` |
@@ -100,7 +101,7 @@ flowchart LR
 - **Frontend SPA (`public/`)**:
   - [public/index.html](public/index.html#L56-L92) — Topbar layout (`#prefs-dropdown-wrap` immediately left of `#sync-btn`, `#jump-top-btn`/`#jump-bottom-btn`, `#tools-dropdown-wrap`, `#export-btn`, and `#toc-toggle-btn` at far top-right) + `plugin:` Blob module loader ([public/index.html](public/index.html#L240-L274)).
   - [public/js/i18n.js](public/js/i18n.js#L1-L416) — Bilingual dictionary (`en` default, `zh` Simplified Chinese) + `getLang()`, `setLang()`, `t()`, `applyStaticI18n()`.
-  - [public/js/markdown.js](public/js/markdown.js#L261-L497) — Block-memoized `Marked` + `KaTeX` + CJK bold fix + GitHub/Obsidian Alerts (`[!NOTE]`..`[!CAUTION]`) + expandable wide tables (`Tables: Expand`, `max-width: 50vw` per column).
+  - [public/js/markdown.js](public/js/markdown.js#L261-L497) — Block-memoized `Marked` + `KaTeX` + CJK bold fix + GitHub/Obsidian Alerts (`[!NOTE]`..`[!CAUTION]`) + expandable wide tables (`Tables: Expand`, `max-width: 30vw` per column).
   - [public/js/markdown.js](public/js/markdown.js#L499-L760) — Mermaid v12 + ELK orthogonal layout (`layout: 'elk'`), `roundOrthogonalSvgPath()`, `polishMermaidSvgToGptStyle()`, `bindPanZoomViewport()`, and `.svg` vector export.
   - [public/js/transcript-view.js](public/js/transcript-view.js#L583-L995) — `TranscriptRenderer` (signature-diffed DOM updates, auto-collapsed `Execution process`, inline subagent cards, and `/btw` · `/context` · `/usage` drawer rendering).
   - [public/js/app.js](public/js/app.js#L78-L235) — `renderPrefsMenu()`, `applyAppearance()`, `applyLanguage()`, SSE live sync, project-grouped sidebar, `Docs / Clips` hover preview + drag-reorder + inline rename, popup modal (`#file-preview-modal`), and split side preview (`#side-preview-pane`).
@@ -139,13 +140,19 @@ When modifying the UI or docs, strictly preserve these explicit user design deci
    - A `/schedule` wakeup opens a new section like a user turn: the registered prompt is the card body, and that firing’s final reply stays outside `Execution process`.
    - The card and Outline title are `定时巡检 #N` when the prompt contains that name. Do not prefix them with `You · Turn #` / `你 · 第 # 轮`.
    - User-turn numbers count only real user messages. Background task-finished and “still running” notices stay inside the current `Execution process`.
+8. **Sidebar Order Stays Put After the Window Opens**:
+   - The first roster may follow recent activity. After that, project folders and the sessions inside them do not reshuffle when messages arrive.
+   - A newly seen project is inserted at the top. A new session in an existing project is appended. `Unassigned` stays last. Pinned sessions keep star order. Opening the window again may take a fresh activity order.
+9. **Markdown Source View Keeps the Centered Passage**:
+   - Markdown in the main Docs view, the right file pane, and the popup offers `Rendered` / `Source` (`预览` / `源文`). The choice is remembered.
+   - Switching views scrolls so the text that was at the center of the viewport stays at the center.
 
 ---
 
 ## 4. Critical Technical Gotchas
 
 ### Gotcha 1 — Antigravity 2.0 `plugin:` Sidecar Blob Module Loader
-In Antigravity 2.0 Desktop sidecars, `window.location.protocol === 'plugin:'` disallows relative ES module imports directly over HTTP. [public/index.html](public/index.html#L249-L269) fetches each module in dependency order (`['js/i18n.js', 'js/markdown.js', 'js/transcript-view.js', 'js/app.js']`) and rewrites `'./<dep>'` specifiers to `Blob` URLs.
+In Antigravity 2.0 Desktop sidecars, `window.location.protocol === 'plugin:'` disallows relative ES module imports directly over HTTP. [public/index.html](public/index.html#L249-L269) fetches each module in dependency order (`['js/i18n.js', 'js/markdown.js', 'js/doc-viewers.js', 'js/transcript-view.js', 'js/sidebar-order.js', 'js/app.js']`) and rewrites `'./<dep>'` specifiers to `Blob` URLs.
 - **Rule**: If you create any new `public/js/*.js` module, add it to `files` in `public/index.html` **before** any file that imports it, and use standard `'./filename.js'` import syntax.
 
 ### Gotcha 2 — Language Keying in Memoized Markdown & Turn Signatures
@@ -201,11 +208,15 @@ agy plugin validate --strict "dist\agy-session-preview.zip"
 1. **De-noise Recovered CLI Stream Retry Errors (`API error (attempt N)`)**:
    - **Context**: When a local TUN proxy (`198.18.0.0/15`) resets a long-lived SSE connection, `agy` writes `ERROR_MESSAGE` steps like `API error (attempt 1): stream reading error...` and may leave an interrupted `PLANNER_RESPONSE`'s `tool_calls` in `pendingToolsQueue` (`status: 'running'`) before succeeding on retry ([server/transcript.mjs](server/transcript.mjs#L758-L847)).
    - **Proposed Improvement**: Detect `^API error \(attempt \d+\):` steps that are followed by successful model/tool steps in the same turn; collapse them into a compact muted retry badge (`⟳ Retried transient network drop ×N`) instead of bright red error banners, exclude recovered retries from `summary.totalErrors`, and mark orphaned pre-retry `pendingToolsQueue` entries as `retried` instead of `running`.
-2. **Cross-Platform Native File Picker (`macOS` / `Linux`)**:
-   - **Context**: `POST /api/pick-file` ([server/app.mjs](server/app.mjs#L672-L695)) currently uses PowerShell `OpenFileDialog` on Windows (`win32`).
-   - **Proposed Improvement**: Add `osascript -e 'POSIX path of (choose file)'` on `darwin` and `zenity --file-selection` / `kdialog --getopenfilename` on `linux`, hiding `#docs-browse-btn` only if unavailable.
+2. **Cross-Platform Native File Picker (`macOS` / `Linux`)** — shipped, unreleased:
+   - `server/file-picker.mjs` selects Windows PowerShell, macOS `osascript`, or the first installed Linux tool among `zenity`, `kdialog`, `qarma`, and `yad`. `GET /api/file-picker` hides Browse when none is available.
 3. **Inline PDF & Video Preview in Popup / Split Sidebar**:
    - **Context**: `classifyFile()` ([server/app.mjs](server/app.mjs#L260-L269)) currently renders `markdown`, `code` (with `#Lstart-Lend` line highlights), and `image`, showing a binary notice + `📂 Folder` button for `.pdf` / `.mp4` / `.webm`.
    - **Proposed Improvement**: Add `kind: 'pdf'` (`<iframe>` / `<embed>` backed by `/api/raw-file`) and `kind: 'video'` (`<video controls>` with HTTP `Range` support in `/api/raw-file`) so research paper PDFs and rollout `.mp4` videos preview inline.
 4. **Mermaid Diagram Search Highlighting & Minimap (Optional)**:
    - Allow `Ctrl+K` in-page search to match text inside rendered Mermaid `<svg>` labels and pan/zoom the inline canvas to the matched node.
+5. **Per-Column Width for `Tables: Fit` (reverted once, do not repeat the first attempt)**:
+   - **Keep**: `Tables: Expand` stays natural width with a **single-column cap of `30vw`** (`public/styles.css`, was `50vw`). Do not revert that cap.
+   - **Requirement**: `Tables: Fit` (`自适应`, `html[data-tables="compact"]`, default `width: 100%`) is still the browser squeezing every column into the reading pane. Replace only that mode with a per-column width, without turning the table into the Expand slider.
+   - **Objective**: For each column, measure unwrapped cell widths. Prefer a width that keeps most cells on one line and does not leave slack beside the short cells. One long outlier must not set the column; it may wrap. Lower bound is the longest unbreakable token (about 4 CJK characters). If the ideal widths sum past the pane, narrow the column whose next-narrower step adds the fewest extra wrapped lines.
+   - **Why the 2026-11-27 attempt was reverted**: `chooseColumnWidth` / `fitColumnWidths` plus `table-layout: fixed` and `<col>` pixel widths made Fit look worse than the previous full-width table. The score (`coverage - 1.15 * waste - 0.2 * extra lines past 2`) did not match how the tables should read. Any retry needs a visual check on a real wide report table (for example `EXPERIMENT_REPORT.md`) before it stays.

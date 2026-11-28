@@ -5,10 +5,20 @@ All notable changes to **Antigravity Session Preview (`agy-session-preview`)** w
 ## [Unreleased]
 
 ### Added
+- **Cross-Platform Native File Dialog**: `POST /api/pick-file` uses the dialog that ships with the OS — Windows PowerShell, macOS `osascript`, and on Linux the first of `zenity`, `kdialog`, `qarma`, or `yad`. `GET /api/file-picker` reports whether one is available. When none is, `📂 Browse…` is hidden and the Docs empty hints no longer point at it.
+- **Frozen Sidebar Order for the Open Window**: After the preview window opens, project folders and the sessions inside them keep their order while messages arrive. A project that appears later is inserted at the top. A new session inside an existing project is appended. `Unassigned` stays last. The order resets when the window is opened again. Pinned sessions still follow star order.
+- **Markdown Source View**: Markdown documents, the right file pane, and the popup preview can switch between `Rendered` / `Source` (`预览` / `源文`). The choice is remembered. Switching keeps the text at the center of the viewport aligned to the same passage.
 - **Outline Fallback for Heading-less Replies**: When a final assistant message or a Docs/Clips page has no `#`–`######` heading, the right Outline still shows one jump target taken from the opening words (`outlineLeadLabel`; CJK characters count as one unit, Latin words stay whole). Real headings, including `h4`–`h6` clamped to outline level 3, still take priority.
 - **Per-Turn `Copy prompt` / `Copy response` and Long-Prompt Fold**: Each user card can copy the plain-text user prompt and the final model response separately (`复制提问` / `复制回复`). The response copy includes the visible reply and decision plan/questions, and excludes intermediate execution-process chatter. Prompts longer than 8 lines or 480 characters collapse to 6 lines with `Show more` / `Show less` (`展开` / `收起`).
 - **Per-Conversation File Sidebar and Tools Panel**: Switching sessions stashes and restores that conversation’s right split pane (open file or folder, plus back/forward history) and its `/btw` · `/context` · `/usage` tab. A session that never opened them stays closed, and the previous session’s tool content is hidden immediately so it cannot flash on the next conversation. Memory lasts for the current page only.
 - **Scheduled Checks as Their Own Turns**: A `/schedule` wakeup is its own prompt-and-reply section instead of being folded into the previous user turn. The card and Outline title are `定时巡检 #N` when the prompt already names one, otherwise `定时巡检` plus the wakeup order. User-turn numbers (`You · Turn #` / `你 · 第 # 轮`) still count only user messages. Task-finished and “still running” notices stay inside `Execution process`.
+
+### Fixed
+- **Lone Approximation Tildes**: A single `~` (as in `~17 ep`) is shown literally. Marked otherwise pairs two of them as strikethrough and draws a line through the text between them. Real strikethrough remains `~~text~~`.
+- **Rewritten Session Logs**: `TranscriptReader` treats a changed file head, or a same-length rewrite, as a new transcript and drops the cached steps. A `/rewind` that replaces the log no longer leaves the removed messages appended after the new text.
+
+### Changed
+- **Expanded Table Columns**: `Tables: Expand` still sizes columns from their content, and one column now stops at `30vw` (previously `50vw`). `Tables: Fit` is unchanged. A per-column Fit width was tried and reverted; the requirement is kept in `HANDOFF.md`.
 
 ## [0.4.1] - 2026-11-26
 

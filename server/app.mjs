@@ -18,6 +18,7 @@ import {
 import { CustomPreviewStore } from './custom-preview.mjs';
 import { PreviewAuthManager } from './auth.mjs';
 import { convertOfficeFileToPdfCached, resolveCachedOfficePdfByName } from './office-convert.mjs';
+import { resolveNativeFilePicker, runNativeFilePicker } from './file-picker.mjs';
 
 const HERE = resolve(fileURLToPath(import.meta.url), '..');
 const PUBLIC_DIR = resolve(HERE, '..', 'public');
@@ -1486,54 +1487,29 @@ export function createPreviewEngine({
       }
     }
 
-    // Native OS file picker (Windows TopMost WinForms, macOS osascript, Linux zenity)
+    if (req.method === 'GET' && pathname === '/api/file-picker') {
+      const picker = await resolveNativeFilePicker();
+      return sendJson(res, 200, {
+        available: Boolean(picker),
+        provider: picker?.id || '',
+      });
+    }
+
+    // Native OS file picker. Node has no dialog of its own:
+    // Windows PowerShell, macOS osascript, Linux zenity / kdialog / qarma / yad.
     if (req.method === 'POST' && pathname === '/api/pick-file') {
       try {
-        let selectedPath = '';
-        if (process.platform === 'win32') {
-          const psScript = [
-            `Add-Type -AssemblyName System.Windows.Forms`,
-            `$top = New-Object System.Windows.Forms.Form`,
-            `$top.TopMost = $true`,
-            `$top.ShowInTaskbar = $false`,
-            `$top.Opacity = 0`,
-            `$dlg = New-Object System.Windows.Forms.OpenFileDialog`,
-            `$dlg.Filter = 'Docs, Office & Media (*.md;*.pdf;*.docx;*.xlsx;*.pptx;*.mp4;*.webm;*.mp3;*.png;*.jpg;*.svg;*.csv;*.jsonl)|*.md;*.markdown;*.pdf;*.docx;*.doc;*.xlsx;*.xls;*.ods;*.pptx;*.ppt;*.mp4;*.webm;*.mov;*.mp3;*.wav;*.png;*.jpg;*.jpeg;*.svg;*.csv;*.jsonl;*.txt|All Files (*.*)|*.*'`,
-            `$dlg.Title = 'Select File to Preview'`,
-            `if ($dlg.ShowDialog($top) -eq 'OK') { Write-Output $dlg.FileName }`,
-            `$top.Dispose()`,
-          ].join('; ');
-          selectedPath = await new Promise((resolvePick, rejectPick) => {
-            const child = spawn('powershell.exe', ['-NoProfile', '-STA', '-Command', psScript], { windowsHide: true });
-            let out = '';
-            child.stdout.on('data', (c) => { out += c.toString('utf-8'); });
-            child.on('error', rejectPick);
-            child.on('close', () => resolvePick(out.trim()));
-          });
-        } else if (process.platform === 'darwin') {
-          selectedPath = await new Promise((resolvePick, rejectPick) => {
-            const child = spawn('osascript', ['-e', 'POSIX path of (choose file with prompt "Select File to Preview")']);
-            let out = '';
-            child.stdout.on('data', (c) => { out += c.toString('utf-8'); });
-            child.on('error', rejectPick);
-            child.on('close', (code) => resolvePick(code === 0 ? out.trim() : ''));
-          });
-        } else {
-          selectedPath = await new Promise((resolvePick) => {
-            const child = spawn('zenity', ['--file-selection', '--title=Select File to Preview']);
-            let out = '';
-            child.stdout.on('data', (c) => { out += c.toString('utf-8'); });
-            child.on('error', () => resolvePick(''));
-            child.on('close', (code) => resolvePick(code === 0 ? out.trim() : ''));
-          });
+        const picked = await runNativeFilePicker();
+        if (!picked.available) {
+          return sendJson(res, 200, { available: false, canceled: false, provider: '' });
         }
-        if (!selectedPath) {
-          return sendJson(res, 200, { canceled: true });
+        if (!picked.path) {
+          return sendJson(res, 200, { available: true, canceled: true, provider: picked.provider });
         }
-        const entry = customStore.createOrUpdate({ filePath: selectedPath });
+        const entry = customStore.createOrUpdate({ filePath: picked.path });
         ensureCustomFileWatch(entry.id, entry.filePath);
         broadcastEvent('custom-preview', entry);
-        return sendJson(res, 200, { canceled: false, entry });
+        return sendJson(res, 200, { available: true, canceled: false, provider: picked.provider, entry });
       } catch (err) {
         return sendJson(res, 500, { error: err.message });
       }

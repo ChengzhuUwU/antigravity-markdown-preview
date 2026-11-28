@@ -4,6 +4,8 @@ All notable changes to **Antigravity Session Preview (`agy-session-preview`)** w
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-28
+
 ### Added
 - **Cross-Platform Native File Dialog**: `POST /api/pick-file` uses the dialog that ships with the OS — Windows PowerShell, macOS `osascript`, and on Linux the first of `zenity`, `kdialog`, `qarma`, or `yad`. `GET /api/file-picker` reports whether one is available. When none is, `📂 Browse…` is hidden and the Docs empty hints no longer point at it.
 - **Frozen Sidebar Order for the Open Window**: After the preview window opens, project folders and the sessions inside them keep their order while messages arrive. A project that appears later is inserted at the top. A new session inside an existing project is appended. `Unassigned` stays last. The order resets when the window is opened again. Pinned sessions still follow star order.
